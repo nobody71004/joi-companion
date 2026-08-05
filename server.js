@@ -262,12 +262,16 @@ async function handleChat(req, res) {
     'X-Accel-Buffering': 'no',
   });
 
+  /* Cancel upstream generation when the client disconnects (real Stop). */
+  const ctl = new AbortController();
+  res.on('close', () => { try { ctl.abort(); } catch {} });
+
   try {
     const upstream = await fetch(cfg.url, {
       method: 'POST',
       headers: cfg.headers,
       body: cfg.body,
-      signal: AbortSignal.timeout(300000),
+      signal: AbortSignal.any([AbortSignal.timeout(300000), ctl.signal]),
     });
 
     if (!upstream.ok) {
@@ -284,17 +288,19 @@ async function handleChat(req, res) {
     }
 
     for await (const chunk of cfg.transform(upstream.body)) {
+      if (res.destroyed || res.writableEnded) break;
       res.write(chunk);
     }
-    res.write('data: [DONE]\n\n');
+    if (!res.destroyed && !res.writableEnded) res.write('data: [DONE]\n\n');
   } catch (err) {
+    if (res.destroyed || res.writableEnded) return; // client already stopped us
     const msg =
       err.name === 'TimeoutError'
-        ? 'The model took too long to respond. For Ollama, the first reply can take a while when a big model (e.g. 32B) is cold-loading — try again now that it is warm, or pick the smaller model in Settings.'
+        ? 'The model took too long to respond. For Ollama, the first reply can take a while when a big model is cold-loading — try again now that it is warm, or pick the smaller model in Settings.'
         : `Could not reach ${base}. Is the provider running? (${err.message})`;
     res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
   }
-  res.end();
+  try { res.end(); } catch {}
 }
 
 /* ---------------- /api/tts (Edge neural voices, free) ----------------

@@ -237,7 +237,31 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     busy = false;
     cancelAudio();
   }
-  $('#btn-stop').addEventListener('click', stopSpeaking);
+
+  /* ---------------- response control: stop / pause / resume ---------------- */
+  let currentAbort = null;   // AbortController for the in-flight /api/chat
+  let paused = false;
+  let pausedBuf = '';        // text that arrived while paused (spoken on resume)
+  let currentBubble = null;  // live bubble of the streaming reply
+  let currentAcc = '';       // accumulated text of the streaming reply
+  const pauseBtn = $('#btn-pause');
+
+  function setPaused(p) {
+    paused = p;
+    pauseBtn.textContent = p ? '▶ Resume' : '⏸ Pause';
+    if (p) { stopSpeaking(); return; } // freeze voice + display
+    /* resume: re-render the whole reply and speak what arrived while paused */
+    if (currentBubble && currentAcc) currentBubble.innerHTML = mdRender(currentAcc);
+    if (pausedBuf.trim()) { queueSentences(pausedBuf); pausedBuf = ''; }
+    pump();
+  }
+  pauseBtn.addEventListener('click', () => setPaused(!paused));
+
+  $('#btn-stop').addEventListener('click', () => {
+    stopSpeaking();
+    if (currentAbort) { try { currentAbort.abort(); } catch {} } // really cancel the model
+    pauseBtn.textContent = '⏸ Pause';
+  });
 
   /* split text into speakable sentences on . ! ? — keeps fragments whole */
   function sentenceSplit(text) {
@@ -398,11 +422,18 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
 
     const messages = [{ role: 'system', text: sys }].concat(history);
     let acc = '';
+    let started = false;
     /* rough prompt token estimate for the live meter (refined by usage chunk) */
     let promptEst = 0;
     for (const m of messages) promptEst += Math.ceil(m.text.length / 4);
     promptEst = Math.max(1, promptEst);
     setCtx(promptEst);
+
+    /* fresh response-control state for this reply */
+    currentAcc = ''; currentBubble = null; paused = false; pausedBuf = '';
+    pauseBtn.textContent = '⏸ Pause';
+    if (currentAbort) { try { currentAbort.abort(); } catch {} }
+    currentAbort = new AbortController();
 
     try {
       const res = await fetch('/api/chat', {
@@ -411,6 +442,7 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
           provider: prefs.provider, model: prefs.model, base: prefs.base,
           apiKey: prefs.key, temperature: prefs.temp, messages,
         }),
+        signal: currentAbort.signal,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -419,8 +451,6 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = '';
-      let started = false;
-      let bubble = null;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -445,27 +475,34 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
           const delta = msg.choices && msg.choices[0] && msg.choices[0].delta && msg.choices[0].delta.content;
           if (!delta) continue;
           acc += delta;
+          currentAcc = acc;
           genTokens += Math.max(1, Math.ceil(delta.length / 4));
           if (!started) {
-            think.remove(); started = true; bubble = addMsg('joi', '');
+            think.remove(); started = true; currentBubble = addMsg('joi', '');
             startGenTimer();
             stopSpeaking(); // reset the speech pipeline for this reply
           }
-          /* speak complete sentences as they arrive — no more waiting */
-          queueSentences(delta);
+          if (paused) {
+            /* frozen: buffer silently, keep reading the stream */
+            pausedBuf += delta;
+          } else {
+            queueSentences(delta);
+            if (currentBubble) currentBubble.innerHTML = mdRender(acc);
+            log.scrollTop = log.scrollHeight;
+          }
           setCtx(promptEst + genTokens);
-          bubble.innerHTML = mdRender(acc);
-          log.scrollTop = log.scrollHeight;
         }
       }
       /* speak whatever is left over (last fragment of the reply) */
       if (streamTail.trim()) {
-        queueSpeech(streamTail.replace(/```[^`]*/g, ' ').replace(/[*_`#>`~]/g, '').trim());
+        const tail = streamTail.replace(/```[^`]*/g, ' ').replace(/[*_`#>`~]/g, '').trim();
+        if (paused) pausedBuf += ' ' + tail; else queueSpeech(tail);
         streamTail = '';
       }
       if (!started) throw new Error('Empty reply from the model.');
       think.remove();
-      if (bubble) bubble.innerHTML = mdRender(acc);
+      if (currentBubble) currentBubble.innerHTML = mdRender(acc);
+      currentAbort = null;
       history.push({ role: 'assistant', text: acc });
       setCtx(promptEst + genTokens);
       stopGenTimer(genTokens);
@@ -478,7 +515,24 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
       stopGenTimer(0);
       stopSpeaking();
       streamTail = '';
-      addMsg('joi', `<span class="em">connection</span>${mdInline(mdEscape(String(err.message || err)))}`, 'signal lost');
+      currentAbort = null;
+      /* deliberate Stop → keep the partial reply, no scary error */
+      if (err && err.name === 'AbortError') {
+        if (started && currentBubble && currentAcc.trim()) {
+          currentBubble.innerHTML = mdRender(currentAcc) +
+            '<span class="em" style="margin-top:6px">⏹ stopped — partial reply kept</span>';
+          history.push({ role: 'assistant', text: currentAcc });
+        }
+        setExpr('neutral');
+        $('#tl-signal').textContent = 'STABLE';
+        return;
+      }
+      const rawMsg = String(err.message || err);
+      const gpuCrash = /llama-server|CUDA|0xc0000409|stack-based|overrun|shared object initialization|out of memory/i.test(rawMsg);
+      const hint = gpuCrash
+        ? '<br><span class="em">fix</span>Your GPU crashed loading the model (VRAM / driver). Pick the smaller model in Settings, or run Ollama in CPU mode — restart it with <code>OLLAMA_GPU_LAYERS=0 ollama serve</code>.'
+        : '';
+      addMsg('joi', `<span class="em">connection</span>${mdInline(mdEscape(rawMsg))}${hint}`, 'signal lost');
       setExpr('sad');
       $('#tl-signal').textContent = 'LOST';
       console.error(err);
@@ -651,8 +705,29 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   };
   voiceSel.addEventListener('change', onVoiceChange(voiceSel));
   quickVoice.addEventListener('change', onVoiceChange(quickVoice));
-  $('#set-auto-speak').checked = prefs.autoSpeak;
-  $('#set-auto-speak').addEventListener('change', () => { prefs.autoSpeak = $('#set-auto-speak').checked; savePrefs(); });
+  const autoSpeakInput = $('#set-auto-speak');
+  autoSpeakInput.checked = prefs.autoSpeak;
+  autoSpeakInput.addEventListener('change', () => {
+    prefs.autoSpeak = autoSpeakInput.checked; savePrefs();
+    if (window.joiDesktop) window.joiDesktop.setMuted(!prefs.autoSpeak); // sync tray label
+  });
+
+  /* desktop EXE extras: system-tray mute events + launch-at-startup toggle */
+  if (window.joiDesktop) {
+    const desktopPanel = $('#panel-desktop');
+    if (desktopPanel) desktopPanel.style.display = '';
+    window.joiDesktop.onMute((muted) => {
+      prefs.autoSpeak = !muted;
+      savePrefs();
+      autoSpeakInput.checked = prefs.autoSpeak;
+      if (muted) stopSpeaking();
+    });
+    const autoStart = $('#set-autostart');
+    if (autoStart) {
+      window.joiDesktop.getAutoLaunch().then((v) => { autoStart.checked = !!v; });
+      autoStart.addEventListener('change', () => window.joiDesktop.setAutoLaunch(autoStart.checked));
+    }
+  }
 
   /* memory UI (second brain stats) */
   function refreshMemUI() {

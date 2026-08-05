@@ -55,7 +55,8 @@
       <div class="stage-tools">
         <button class="btn small" id="btn-calibrate" title="Align her features to the render">◎ Align features</button>
         <button class="btn small" id="btn-quote" title="She says a Blade Runner line">❝ Quote</button>
-        <button class="btn small" id="btn-stop" title="Stop her speaking">■ Stop</button>
+        <button class="btn small" id="btn-pause" title="Pause / resume her reply">⏸ Pause</button>
+        <button class="btn small" id="btn-stop" title="Stop her reply completely (cancels the model)">■ Stop</button>
       </div>
       <div class="voice-quick">
         <label class="quick-label" for="quick-voice">Voice</label>
@@ -122,6 +123,16 @@
         <span>She speaks her replies aloud</span>
       </label>
       <p class="note">Studio-quality neural voices via Microsoft Edge (free). If TTS is not set up yet, run <code>npm run setup:tts</code> in the joi-companion folder.</p>
+    </div>
+
+    <div class="panel" id="panel-desktop" style="display:none">
+      <h3 class="group-title">Desktop app <span class="tag">EXE</span></h3>
+      <label class="switch-row">
+        <input type="checkbox" id="set-autostart">
+        <span class="switch"></span>
+        <span>Launch JOI when Windows starts</span>
+      </label>
+      <p class="note">She lives in the system tray — closing the window keeps her running. Right-click her tray icon for mute &amp; quit.</p>
     </div>
 
     <div class="panel">
