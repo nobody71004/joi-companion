@@ -110,6 +110,11 @@
       <label class="field-label">Temperature</label>
       <input type="range" id="set-temp" min="0" max="1.4" step="0.05" value="0.7">
       <span class="range-val" id="temp-val">0.70</span>
+      <div class="switch-row" id="row-cpu">
+        <input type="checkbox" id="set-cpu">
+        <span class="switch"></span>
+        <span>CPU mode (no GPU) — crash-proof for models bigger than your VRAM</span>
+      </div>
       <p class="note" id="ollama-note">Ollama detected — local models listed. Fully offline &amp; free.</p>
     </div>
 

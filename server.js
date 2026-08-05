@@ -129,21 +129,61 @@ function serveStatic(req, res, urlPath) {
   });
 }
 
-/* ---------------- /api/models (Ollama model list) ---------------- */
+/* ---------------- GPU detection (for model-fit warnings) ---------------- */
+const { spawnSync } = require('child_process');
+let gpuCache = { at: 0, info: null };
+function detectGPU() {
+  if (Date.now() - gpuCache.at < 15000 && gpuCache.info) return gpuCache.info;
+  const info = { hasGpu: false, name: '', totalGb: 0, freeGb: 0 };
+  try {
+    const r = spawnSync(
+      'nvidia-smi',
+      ['--query-gpu=name,memory.total,memory.free', '--format=csv,noheader,nounits'],
+      { timeout: 3000, encoding: 'utf8', windowsHide: true }
+    );
+    if (r.status === 0 && r.stdout) {
+      const parts = r.stdout.trim().split(/\r?\n/)[0].split(',').map((s) => s.trim());
+      if (parts.length >= 3 && parts[0] && !/no nvidia/i.test(parts[0])) {
+        info.hasGpu = true;
+        info.name = parts[0];
+        info.totalGb = +(parts[1] / 1024).toFixed(1);
+        info.freeGb = +(parts[2] / 1024).toFixed(1);
+      }
+    }
+  } catch { /* no nvidia-smi → CPU-only machine */ }
+  gpuCache = { at: Date.now(), info };
+  return info;
+}
+
+/* ---------------- /api/models (Ollama model list + GPU fit) ---------------- */
 
 async function handleModels(res) {
   try {
     const r = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(2500) });
-    if (!r.ok) return sendJson(res, 200, { running: false, models: [] });
+    if (!r.ok) return sendJson(res, 200, { running: false, models: [], gpu: detectGPU() });
     const data = await r.json();
-    const models = (data.models || []).map((m) => ({
-      name: m.name,
-      size: m.size,
-      contextLength: m.details && m.details.context_length ? m.details.context_length : (m.context_length || 32768),
-    }));
-    return sendJson(res, 200, { running: true, models });
+    const gpu = detectGPU();
+    const models = (data.models || []).map((m) => {
+      const sizeGb = +(m.size / (1024 * 1024 * 1024)).toFixed(1);
+      /* a model "fits" if it fits the FREE VRAM with ~15% headroom;
+         bigger models still work via partial offload but risk CUDA crashes */
+      const fits = gpu.hasGpu ? sizeGb <= Math.max(0.5, gpu.freeGb * 0.85) : true;
+      return {
+        name: m.name,
+        size: m.size,
+        sizeGb,
+        fits,
+        gpuNote: gpu.hasGpu
+          ? (fits
+              ? `fits your GPU (${sizeGb} GB ≤ ${gpu.freeGb} GB free)`
+              : `${sizeGb} GB model vs ${gpu.freeGb} GB free VRAM — partial CPU offload, crash risk. Use CPU mode.`)
+          : 'no NVIDIA GPU detected — CPU only',
+        contextLength: m.details && m.details.context_length ? m.details.context_length : (m.context_length || 32768),
+      };
+    });
+    return sendJson(res, 200, { running: true, models, gpu });
   } catch {
-    return sendJson(res, 200, { running: false, models: [] });
+    return sendJson(res, 200, { running: false, models: [], gpu: detectGPU() });
   }
 }
 
@@ -232,6 +272,8 @@ async function handleChat(req, res) {
   if (!base) return sendJson(res, 400, { error: 'No provider base URL configured.' });
 
   let cfg;
+  const isOllama = provider === 'ollama';
+  const forceCPU = !!(body.forceCPU && isOllama);
   if (provider === 'gemini') {
     cfg = toGeminiStream(apiKey, model, messages, temperature);
   } else {
@@ -246,13 +288,17 @@ async function handleChat(req, res) {
     /* stream_options.include_usage asks the provider to send a final chunk
        with exact prompt/completion token counts (Ollama, LM Studio, Groq,
        OpenAI and OpenRouter all support it) — feeds the context meter. */
-    cfg.body = JSON.stringify({
+    cfg.bodyObj = {
       model,
       messages: messages.map((m) => ({ role: m.role, content: m.text })),
       temperature,
       stream: true,
       stream_options: { include_usage: true },
-    });
+    };
+    /* num_gpu: 0 forces CPU-only inference — the crash-proof mode for
+       models bigger than your VRAM (no CUDA init, no 0xc0000409 crash). */
+    if (forceCPU) cfg.bodyObj.options = { num_gpu: 0 };
+    cfg.body = JSON.stringify(cfg.bodyObj);
   }
 
   res.writeHead(200, {
@@ -266,15 +312,34 @@ async function handleChat(req, res) {
   const ctl = new AbortController();
   res.on('close', () => { try { ctl.abort(); } catch {} });
 
-  try {
-    const upstream = await fetch(cfg.url, {
-      method: 'POST',
-      headers: cfg.headers,
-      body: cfg.body,
-      signal: AbortSignal.any([AbortSignal.timeout(300000), ctl.signal]),
-    });
+  /* ---- GPU-crash auto-recovery ----
+     If Ollama's backend dies (llama-server terminated / CUDA init failed /
+     stack-buffer overrun — the 0xc0000409 crash), retry the SAME request once
+     with num_gpu: 0 (pure CPU). No restart needed: num_gpu is per-request. */
+  const CRASH_RE = /llama-server|CUDA|0xc0000409|stack-based|overrun|shared object initialization|out of memory/i;
 
-    if (!upstream.ok) {
+  let upstream = null;
+  let usedCPU = false;
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt === 1) {
+        /* second chance: force CPU for ollama only */
+        if (!isOllama) break;
+        cfg.bodyObj = Object.assign({}, cfg.bodyObj, { options: { num_gpu: 0 } });
+        cfg.body = JSON.stringify(cfg.bodyObj);
+        usedCPU = true;
+      }
+
+      upstream = await fetch(cfg.url, {
+        method: 'POST',
+        headers: cfg.headers,
+        body: cfg.body,
+        signal: AbortSignal.any([AbortSignal.timeout(300000), ctl.signal]),
+      });
+
+      if (upstream.ok) break;
+
+      /* pull the error detail and decide whether this was a GPU crash */
       let detail = '';
       try {
         const j = await upstream.json();
@@ -282,9 +347,16 @@ async function handleChat(req, res) {
       } catch {
         detail = (await upstream.text()).slice(0, 300);
       }
+      if (attempt === 0 && CRASH_RE.test(detail)) continue; // retry in CPU mode
+
       res.write(`data: ${JSON.stringify({ error: `Provider error (${upstream.status}): ${detail}` })}\n\n`);
       res.end();
       return;
+    }
+
+    if (usedCPU) {
+      /* let the client know the reply is running on CPU (slower, stable) */
+      res.write(`data: ${JSON.stringify({ notice: 'GPU load failed — running this reply in CPU mode (stable, a bit slower).' })}\n\n`);
     }
 
     for await (const chunk of cfg.transform(upstream.body)) {

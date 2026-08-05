@@ -12,7 +12,7 @@
   const $$ = (s) => [...document.querySelectorAll(s)];
   const SKEY = 'joi.app.v2';
   const loadPrefs = () => {
-    try { return Object.assign({ provider: 'ollama', model: '', base: '', key: '', temp: 0.7, voice: 'en-US-MichelleNeural', autoSpeak: true }, JSON.parse(localStorage.getItem(SKEY) || '{}')); }
+    try { return Object.assign({ provider: 'ollama', model: '', base: '', key: '', temp: 0.7, voice: 'en-US-MichelleNeural', autoSpeak: true, forceCPU: false }, JSON.parse(localStorage.getItem(SKEY) || '{}')); }
     catch { return {}; }
   };
   let prefs = loadPrefs();
@@ -437,10 +437,10 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
 
     try {
       const res = await fetch('/api/chat', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        method: 'POST', headers: { 'Content-Type': 'application/json' },          body: JSON.stringify({
           provider: prefs.provider, model: prefs.model, base: prefs.base,
           apiKey: prefs.key, temperature: prefs.temp, messages,
+          forceCPU: !!prefs.forceCPU,
         }),
         signal: currentAbort.signal,
       });
@@ -464,6 +464,15 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
           let msg;
           try { msg = JSON.parse(payload); } catch { continue; }
           if (msg.error) throw new Error(msg.error);
+          /* server notice (e.g. auto-fell back to CPU mode after a GPU crash) */
+          if (msg.notice) {
+            if (currentBubble) {
+              currentBubble.insertAdjacentHTML('beforeend', `<div class="em" style="margin-top:6px;font-size:11px">⚠ ${mdEscape(msg.notice)}</div>`);
+            } else {
+              addMsg('joi', `<span class="em">system</span>${mdInline(mdEscape(msg.notice))}`, 'auto-recovery');
+            }
+            continue;
+          }
           /* usage chunk (stream_options.include_usage) carries exact counts */
           if (msg.usage) {
             if (msg.usage.prompt_tokens) promptEst = msg.usage.prompt_tokens;
@@ -626,6 +635,7 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     $('#lbl-key').style.display = p.key ? '' : 'none';
     $('#set-key').style.display = p.key ? '' : 'none';
     $('#ollama-note').style.display = prefs.provider === 'ollama' ? '' : 'none';
+    if (cpuRow) cpuRow.style.display = prefs.provider === 'ollama' ? '' : 'none';
     if (prefs.provider !== 'custom') {
       prefs.base = p.base;
       $('#set-base').value = p.base;
@@ -646,6 +656,14 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     savePrefs();
   });
 
+  /* GPU fit warnings from /api/models — warn before a crash, not after */
+  let lastGpuInfo = null;
+  function gpuFitNote(gpu) {
+    lastGpuInfo = gpu;
+    if (!gpu || !gpu.hasGpu) return 'No NVIDIA GPU detected — everything runs on CPU.';
+    return `GPU: ${gpu.name} · ${gpu.freeGb} GB free of ${gpu.totalGb} GB.`;
+  }
+
   async function refreshModels() {
     if (prefs.provider === 'ollama') {
       try {
@@ -653,8 +671,10 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
         const d = await r.json();
         modelSel.innerHTML = '';
         if (d.running && d.models.length) {
+          const gpuLine = gpuFitNote(d.gpu);
           d.models.forEach((m) => {
-            modelSel.add(new Option(m.name, m.name));
+            const warn = (d.gpu && d.gpu.hasGpu && m.sizeGb && !m.fits) ? ' ⚠ big' : '';
+            modelSel.add(new Option(m.name + warn, m.name));
             if (m.contextLength) window.__ctxByModel = Object.assign(window.__ctxByModel || {}, { [m.name]: m.contextLength });
           });
           if (!d.models.some((m) => m.name === prefs.model)) prefs.model = d.models[0].name;
@@ -663,7 +683,12 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
           $('#foot-model').textContent = 'local · ' + prefs.model;
           const cl = (window.__ctxByModel || {})[prefs.model];
           if (cl) { ctxLimit = cl; ctxLimitEl.textContent = fmtTok(cl); }
-          $('#ollama-note').textContent = 'Ollama detected — ' + d.models.length + ' local model(s). Fully offline & free.';
+          const big = d.models.filter((m) => d.gpu && d.gpu.hasGpu && m.sizeGb && !m.fits);
+          const cpuLine = prefs.forceCPU ? ' · CPU mode ON (no GPU)' : '';
+          const warnLine = big.length
+            ? ` ${big.map((m) => m.sizeGb + ' GB ' + m.name.split('/').pop()).join(', ')} ${big.length === 1 ? 'is' : 'are'} bigger than your VRAM — use CPU mode or a smaller model to avoid crashes.`
+            : '';
+          $('#ollama-note').textContent = 'Ollama detected — ' + d.models.length + ' local model(s). ' + gpuLine + cpuLine + warnLine;
         } else {
           modelSel.add(new Option('(Ollama not running — start it first)', ''));
           $('#ollama-note').textContent = 'Ollama is not running. Start it (ollama serve) then refresh.';
@@ -710,6 +735,16 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   autoSpeakInput.addEventListener('change', () => {
     prefs.autoSpeak = autoSpeakInput.checked; savePrefs();
     if (window.joiDesktop) window.joiDesktop.setMuted(!prefs.autoSpeak); // sync tray label
+  });
+
+  /* CPU mode toggle (Ollama) — num_gpu:0 on every request, crash-proof */
+  const cpuToggle = $('#set-cpu');
+  const cpuRow = $('#row-cpu');
+  cpuToggle.checked = !!prefs.forceCPU;
+  cpuToggle.addEventListener('change', () => {
+    prefs.forceCPU = cpuToggle.checked;
+    savePrefs();
+    refreshModels(); // refresh the note so it reflects CPU mode
   });
 
   /* desktop EXE extras: system-tray mute events + launch-at-startup toggle */
