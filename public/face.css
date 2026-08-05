@@ -1,0 +1,538 @@
+/* ============================================================
+   JOI — holo stage + face preview page (Blade Runner 2049 mood)
+   ============================================================ */
+
+:root {
+  --gold: #ffd27a;
+  --pink: #ff9ecb;
+  --violet: #b06fe0;
+  --gold-dim: rgba(255, 210, 120, 0.55);
+  --pink-dim: rgba(255, 158, 203, 0.6);
+  --gold-faint: rgba(255, 210, 120, 0.16);
+  --pink-faint: rgba(255, 158, 203, 0.16);
+  --bg-0: #04060c;
+  --bg-1: #0a0f1c;
+  --bg-2: #10172a;
+  --ink: #eae7e0;
+  --ink-dim: #9aa1ad;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+html { height: 100%; }
+body {
+  min-height: 100%;
+  background:
+    radial-gradient(1100px 640px at 28% 8%, #181f38 0%, transparent 58%),
+    radial-gradient(900px 620px at 78% 92%, #2a1430 0%, transparent 55%),
+    radial-gradient(700px 500px at 70% 20%, #101a2c 0%, transparent 60%),
+    var(--bg-0);
+  color: var(--ink);
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  overflow-x: hidden;
+  overflow-y: auto;
+  position: relative;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ---------- cinematic atmosphere layers ---------- */
+.fog {
+  position: fixed; inset: -10%;
+  pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(46% 34% at 22% 78%, rgba(255, 150, 90, 0.10), transparent 70%),
+    radial-gradient(42% 30% at 84% 22%, rgba(190, 110, 255, 0.10), transparent 70%),
+    radial-gradient(50% 38% at 55% 55%, rgba(80, 120, 200, 0.08), transparent 70%);
+  filter: blur(28px);
+  animation: fog-drift 26s ease-in-out infinite alternate;
+}
+.fog.fog2 {
+  animation-duration: 34s;
+  animation-direction: alternate-reverse;
+}
+@keyframes fog-drift {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  100% { transform: translate3d(-4%, -3%, 0) scale(1.12); }
+}
+#page-fx { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+.grain {
+  position: fixed; inset: 0; z-index: 6; pointer-events: none; opacity: 0.55;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.06'/%3E%3C/svg%3E");
+  animation: grain-jitter 0.9s steps(4) infinite;
+}
+@keyframes grain-jitter {
+  0% { transform: translate(0, 0); } 25% { transform: translate(-2%, 1%); }
+  50% { transform: translate(1%, -1%); } 75% { transform: translate(-1%, 2%); }
+  100% { transform: translate(2%, 0); }
+}
+.vignette-page {
+  position: fixed; inset: 0; z-index: 5; pointer-events: none;
+  background: radial-gradient(125% 125% at 50% 42%, transparent 58%, rgba(2, 3, 8, 0.72) 100%);
+}
+
+.app {
+  position: relative; z-index: 2;
+  display: flex; flex-direction: column;
+  min-height: 100vh;
+  height: 100vh;
+  max-height: 100vh;
+}
+@media (max-width: 880px) {
+  .app { height: auto; max-height: none; }
+}
+
+/* ---------- top bar ---------- */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 13px 26px;
+  border-bottom: 1px solid var(--gold-faint);
+  background: linear-gradient(180deg, rgba(16, 23, 42, 0.88), rgba(4, 6, 12, 0.35));
+  backdrop-filter: blur(8px);
+}
+.brand { display: flex; align-items: baseline; gap: 16px; }
+.brand-name {
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 24px; font-weight: 700;
+  letter-spacing: 10px;
+  background: linear-gradient(100deg, #ffe9b0 10%, var(--gold) 38%, var(--pink) 68%, var(--violet) 95%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 14px rgba(255, 200, 130, 0.4));
+  animation: title-glow 5s ease-in-out infinite;
+}
+@keyframes title-glow {
+  0%, 100% { filter: drop-shadow(0 0 10px rgba(255, 200, 130, 0.35)); }
+  50% { filter: drop-shadow(0 0 22px rgba(255, 170, 200, 0.55)); }
+}
+.brand-sub { font-size: 11px; letter-spacing: 3px; text-transform: uppercase; color: var(--ink-dim); }
+.telemetry { display: flex; gap: 18px; font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 1.5px; color: var(--ink-dim); }
+.telemetry b { color: var(--pink-dim); font-weight: 500; }
+.blink-cursor::after { content: "▊"; color: var(--pink); margin-left: 3px; animation: cursor-blink 1.1s steps(1) infinite; }
+@keyframes cursor-blink { 50% { opacity: 0; } }
+
+/* ---------- main layout ---------- */
+.main {
+  flex: 1; display: flex; gap: 26px;
+  padding: 22px 26px 18px;
+  min-height: 0;
+}
+.stage-wrap {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  min-height: 0;
+}
+
+/* ============================================================
+   HOLO STAGE (face.js injects canvas + svg + overlays inside)
+   ============================================================ */
+.jf-stage {
+  position: relative;
+  overflow: hidden;
+  /* width drives a 4:5 box; the calc() caps it so the stage always
+     fits between the top and bottom bars (no overlap) */
+  width: min(66vh, 540px, calc((100vh - 190px) * 0.8));
+  max-width: 100%;
+  aspect-ratio: 4 / 5;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 170, 210, 0.22);
+  box-shadow:
+    0 0 80px rgba(255, 150, 200, 0.16),
+    0 30px 80px rgba(0, 0, 0, 0.6),
+    inset 0 0 90px rgba(0, 0, 0, 0.55);
+  background:
+    radial-gradient(140% 90% at 50% 0%, #211838 0%, #0d1224 46%, #04060c 100%);
+}
+.jf-stage::before {
+  content: "";
+  position: absolute; inset: 0;
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 170, 210, 0.05) 0 1px, transparent 1px 56px),
+    repeating-linear-gradient(90deg, rgba(255, 170, 210, 0.05) 0 1px, transparent 1px 56px);
+  z-index: 0;
+}
+.jf-stage::after {
+  /* floor glow under the hologram */
+  content: "";
+  position: absolute; left: 8%; right: 8%; bottom: 4%; height: 18%;
+  background: radial-gradient(50% 100% at 50% 100%, rgba(255, 170, 210, 0.14), transparent 70%);
+  filter: blur(14px);
+  z-index: 0;
+}
+
+.jf-fx { position: absolute; inset: 0; z-index: 1; }
+.jf-base { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; cursor: crosshair; }
+
+/* ---------- align-features edit bar (living portrait) ----------
+   Fixed to the VIEWPORT bottom so it never covers her face and can
+   never be clipped by the stage. Slim, wraps on narrow screens. */
+.jf-editbar {
+  position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%);
+  z-index: 60;
+  display: none;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 10px;
+  max-width: calc(100vw - 20px);
+  background: linear-gradient(180deg, rgba(6, 8, 16, 0.96), rgba(6, 8, 16, 0.88));
+  border: 1px solid rgba(255, 210, 74, 0.45);
+  border-radius: 14px;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+.jf-editbar-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8.5px; letter-spacing: 1.1px;
+  color: var(--gold);
+  text-transform: uppercase;
+  white-space: nowrap;
+  width: 100%;
+  text-align: center;
+}
+.jf-editbar-chips { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+.jf-editbar-chip {
+  font: 600 10px 'Inter', sans-serif;
+  letter-spacing: 0.5px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(61, 242, 255, 0.4);
+  border-radius: 999px;
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+.jf-editbar-chip:hover { background: rgba(61, 242, 255, 0.12); }
+.jf-editbar-chip.active {
+  color: #06222b;
+  background: #3df2ff;
+  border-color: #3df2ff;
+  box-shadow: 0 0 12px rgba(61, 242, 255, 0.45);
+}
+.jf-editbar-done {
+  font: 600 10.5px 'Inter', sans-serif;
+  letter-spacing: 0.8px;
+  color: #17060f;
+  background: linear-gradient(135deg, #ffd24a, #ff9ecb);
+  border: none;
+  border-radius: 999px;
+  padding: 5px 13px;
+  cursor: pointer;
+  box-shadow: 0 0 14px rgba(255, 210, 74, 0.4);
+  transition: all 0.15s ease;
+}
+.jf-editbar-done:hover { transform: translateY(-1px); box-shadow: 0 0 20px rgba(255, 210, 74, 0.6); }
+
+/* ---- photo (render) mode: the reference portraits ---- */
+.jf-portrait {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; object-position: center 30%;
+  clip-path: ellipse(47% 45% at 50% 46%);
+  opacity: 0; z-index: 2;
+  transition: opacity 0.5s ease, filter 0.6s ease, transform 0.6s ease;
+  transform: scale(1.01);
+  filter: brightness(1.02) saturate(1.02);
+}
+.jf-portrait.loaded, .jf-portrait.active { opacity: 1; }
+.jf-mood {
+  position: absolute; inset: 0; z-index: 3; pointer-events: none;
+  opacity: 0; mix-blend-mode: soft-light;
+  transition: opacity 0.6s ease;
+}
+.jf-wave {
+  position: absolute; bottom: 7%; left: 50%; transform: translateX(-50%);
+  width: 42%; height: 26px; z-index: 4;
+  opacity: 0; transition: opacity 0.25s ease;
+  filter: drop-shadow(0 0 6px rgba(255, 170, 210, 0.5));
+}
+.jf-svg.hidden { display: none; }
+.jf-photo-talking .jf-portrait {
+  animation: photo-bob 0.9s ease-in-out infinite;
+}
+@keyframes photo-bob {
+  0%, 100% { transform: scale(1.01) translateY(0); }
+  50%      { transform: scale(1.01) translateY(-3px); }
+}
+
+.jf-svg-wrap {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 2;
+  filter: hue-rotate(0deg);
+  transition: filter 0.6s ease;
+}
+.jf-svg-wrap svg { height: 100%; width: auto; max-width: 100%; }
+
+.jf-scanlines {
+  position: absolute; inset: 0; z-index: 3; pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(0,0,0,0.16) 0 1px, transparent 1px 3px);
+  opacity: 0.45;
+  mix-blend-mode: multiply;
+}
+.jf-vignette {
+  position: absolute; inset: 0; z-index: 3; pointer-events: none;
+  background: radial-gradient(115% 115% at 50% 45%, transparent 55%, rgba(2, 3, 8, 0.62) 100%);
+}
+.jf-watermark {
+  position: absolute; left: 0; right: 0; bottom: 12px; z-index: 4;
+  text-align: center;
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 13px; letter-spacing: 15px;
+  color: rgba(255, 190, 220, 0.3);
+  pointer-events: none;
+  text-shadow: 0 0 14px rgba(255, 170, 210, 0.4);
+}
+
+/* ---------- face motion ---------- */
+#jf-tilt {
+  transform-box: view-box;
+  transform-origin: 200px 167px;
+}
+#jf-head {
+  transform-box: view-box;
+  transform-origin: 200px 167px;
+  animation: jf-breathe 6.5s ease-in-out infinite;
+}
+@keyframes jf-breathe {
+  0%, 100% { transform: translateY(0) rotate(-0.5deg); }
+  50%      { transform: translateY(4px) rotate(0.7deg); }
+}
+#jf-hair-back {
+  transform-box: fill-box;
+  animation: jf-hair-float 8s ease-in-out infinite;
+}
+@keyframes jf-hair-float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-3px); }
+}
+.jf-eye, .jf-brow, #jf-tilt, .jf-pupil { will-change: transform; }
+.jf-eye  { transform-box: fill-box; transform-origin: 50% 25%; }
+.jf-brow { transform-box: fill-box; }
+#jf-brow-l { transform-origin: 100% 50%; }
+#jf-brow-r { transform-origin: 0% 50%; }
+.jf-pupil { transform-box: fill-box; transform-origin: 50% 50%; }
+
+#jf-blush-l, #jf-blush-r { transition: opacity 0.5s ease; }
+
+.jf-talking #jf-jaw,
+.jf-talking .jf-mouth,
+.jf-talking #jf-tilt,
+.jf-talking .jf-eye,
+.jf-talking .jf-brow { transition: none !important; }
+
+.jf-blink .jf-eye { animation: jf-blink 0.24s ease-in-out; }
+@keyframes jf-blink {
+  0%, 100% { transform: scaleY(1); }
+  45%, 55% { transform: scaleY(0.06); }
+}
+
+/* ============================================================
+   CONTROLS PANEL
+   ============================================================ */
+.controls {
+  width: 320px;
+  overflow-y: auto;
+  padding: 2px 4px 14px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 170, 210, 0.3) transparent;
+}
+.panel {
+  background: linear-gradient(180deg, rgba(20, 27, 46, 0.72), rgba(10, 14, 26, 0.6));
+  border: 1px solid var(--pink-faint);
+  border-radius: 14px;
+  padding: 14px 14px 16px;
+  margin-bottom: 14px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.group-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 10.5px; font-weight: 600;
+  letter-spacing: 3px; text-transform: uppercase;
+  color: var(--pink-dim);
+  margin-bottom: 11px;
+}
+.group-title::before {
+  content: ""; width: 14px; height: 1px;
+  background: linear-gradient(90deg, var(--pink), transparent);
+}
+.group-title .tag {
+  margin-left: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; letter-spacing: 1px;
+  color: var(--ink-dim);
+  border: 1px solid rgba(255, 170, 210, 0.2);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.expr-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.btn {
+  font: 500 12.5px 'Inter', sans-serif;
+  letter-spacing: 0.4px;
+  color: var(--ink);
+  background: linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.02));
+  border: 1px solid rgba(255, 170, 210, 0.24);
+  border-radius: 9px;
+  padding: 10px 12px;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.18s ease;
+}
+.btn:hover {
+  border-color: rgba(255, 170, 210, 0.6);
+  background: rgba(255, 170, 210, 0.09);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 18px rgba(255, 150, 200, 0.14);
+}
+.btn:active { transform: translateY(0) scale(0.98); }
+.btn.active {
+  color: #17060f;
+  background: linear-gradient(135deg, #ffc9e4, #e48ad0 55%, #b06fe0);
+  border-color: #ffb7dc;
+  box-shadow: 0 0 20px rgba(255, 150, 200, 0.4);
+}
+.btn.primary {
+  grid-column: 1 / -1;
+  background: linear-gradient(135deg, rgba(255, 201, 228, 0.16), rgba(176, 111, 224, 0.16));
+  border-color: rgba(255, 170, 210, 0.4);
+}
+.btn.primary:hover { box-shadow: 0 0 24px rgba(255, 150, 200, 0.25); }
+
+.row { display: flex; gap: 8px; }
+.row .btn { flex: 1; }
+
+.switch-row {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 14px;
+  font-size: 12.5px; color: var(--ink-dim); cursor: pointer;
+  user-select: none;
+}
+.switch-row input { display: none; }
+.switch {
+  position: relative; width: 38px; height: 20px; flex: none;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 170, 210, 0.28);
+  transition: all 0.2s ease;
+}
+.switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: #c8cdd8; transition: all 0.2s ease;
+}
+.switch-row input:checked + .switch {
+  background: rgba(255, 170, 210, 0.28);
+  border-color: #ffb7dc;
+}
+.switch-row input:checked + .switch::after {
+  left: 20px; background: #ffb7dc;
+  box-shadow: 0 0 8px rgba(255, 170, 210, 0.7);
+}
+
+.select {
+  width: 100%;
+  font: 500 12.5px 'Inter', sans-serif;
+  color: var(--ink);
+  background: rgba(10, 14, 26, 0.9);
+  border: 1px solid rgba(255, 170, 210, 0.24);
+  border-radius: 9px;
+  padding: 9px 10px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.18s ease;
+}
+.select:hover, .select:focus { border-color: rgba(255, 170, 210, 0.55); }
+
+.field-label {
+  display: block;
+  font-size: 10.5px; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--ink-dim);
+  margin: 12px 0 6px;
+}
+
+.mode-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+.thumbs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.thumb {
+  width: 100%; aspect-ratio: 4 / 5;
+  object-fit: cover;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 170, 210, 0.25);
+  cursor: pointer;
+  opacity: 0.72;
+  transition: all 0.18s ease;
+}
+.thumb:hover { opacity: 1; transform: translateY(-1px); }
+.thumb.active {
+  opacity: 1;
+  border-color: #ffb7dc;
+  box-shadow: 0 0 16px rgba(255, 150, 200, 0.4);
+}
+
+.note {
+  margin-top: 4px;
+  font-size: 12px; line-height: 1.65;
+  color: var(--ink-dim);
+}
+.note b { color: var(--pink); font-weight: 600; }
+
+/* ---------- bottom bar ---------- */
+.bottombar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 26px 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; letter-spacing: 1.6px;
+  color: var(--ink-dim);
+  border-top: 1px solid var(--pink-faint);
+  background: linear-gradient(0deg, rgba(4, 6, 12, 0.8), transparent);
+}
+.bottombar .accent { color: var(--pink-dim); }
+
+/* ---------- responsive (tablet / mobile) ---------- */
+@media (max-width: 880px) {
+  .app { height: auto; max-height: none; }
+  .main {
+    flex-direction: column;
+    gap: 16px;
+    padding: 14px 14px 24px;
+    overflow: visible;
+  }
+  .stage-wrap {
+    flex: none;
+    width: 100%;
+    min-height: 0;
+    padding: 0;
+  }
+  #holo-stage {
+    width: min(78vw, 400px);
+    max-width: 100%;
+  }
+  .controls {
+    width: 100%;
+    max-width: 520px;
+    margin: 0 auto;
+    overflow: visible;
+    padding: 0;
+  }
+  .telemetry { display: none; }
+  .topbar { padding: 10px 14px; }
+  .brand-sub { display: none; }
+  .bottombar { flex-wrap: wrap; gap: 4px 14px; padding: 8px 14px 12px; }
+  .panel { margin-bottom: 12px; }
+  .expr-grid { grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }
+  body { overflow-y: auto; }
+}
+
+/* ---------- very small screens ---------- */
+@media (max-width: 380px) {
+  .brand-name { font-size: 19px; letter-spacing: 8px; }
+  #holo-stage { width: 86vw; }
+  .controls { max-width: none; }
+}

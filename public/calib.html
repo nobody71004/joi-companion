@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>JOI · Feature Alignment Viewer</title>
+<style>
+  body { margin: 0; background: #0a0a12; display: flex; align-items: center; justify-content: center; height: 100vh; font-family: monospace; color: #ddd; overflow: hidden; }
+  .wrap { position: relative; }
+  #img { display: block; max-height: 97vh; max-width: 97vw; }
+  #grid { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+  #readout { position: fixed; top: 8px; left: 8px; z-index: 9; font-size: 12px; background: rgba(0,0,0,0.75); padding: 6px 10px; border-radius: 6px; line-height: 1.5; }
+  #readout b { color: #ffd24a; }
+  .shape { position: absolute; z-index: 3; pointer-events: none; }
+  .shape path { fill: rgba(255, 210, 74, 0.08); stroke-width: 2.5; }
+  .lbl { position: absolute; z-index: 3; font-size: 12px; font-weight: 700; letter-spacing: 1px; background: rgba(0,0,0,0.6); padding: 1px 5px; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <img id="img" src="img/images.jpg">
+  <canvas id="grid"></canvas>
+</div>
+<div id="readout">loading…</div>
+<script>
+  const img = document.getElementById('img');
+  const cv = document.getElementById('grid');
+  const readout = document.getElementById('readout');
+  const COLORS = { eyeL: '#ffd24a', eyeR: '#ffd24a', browL: '#4de3ff', browR: '#4de3ff', mouth: '#ff6fb0', nose: '#8df0a8' };
+  const LABELS = { eyeL: 'L EYE', eyeR: 'R EYE', browL: 'L BROW', browR: 'R BROW', mouth: 'MOUTH', nose: 'NOSE' };
+
+  function drawGrid() {
+    const r = img.getBoundingClientRect();
+    cv.width = r.width; cv.height = r.height;
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const step = 10;
+    ctx.font = '10px monospace';
+    for (let x = 0; x <= 100; x += step) {
+      ctx.strokeStyle = 'rgba(255,90,90,0.30)'; ctx.lineWidth = 0.5;
+      ctx.beginPath(); ctx.moveTo(r.width * x / 100, 0); ctx.lineTo(r.width * x / 100, r.height); ctx.stroke();
+      ctx.fillStyle = '#ff9090';
+      ctx.fillText(x + '%', r.width * x / 100 + 3, 12);
+    }
+    for (let y = 0; y <= 100; y += step) {
+      ctx.strokeStyle = 'rgba(90,160,255,0.30)';
+      ctx.beginPath(); ctx.moveTo(0, r.height * y / 100); ctx.lineTo(r.width, r.height * y / 100); ctx.stroke();
+      ctx.fillStyle = '#90c0ff';
+      ctx.fillText(y + '%', 3, r.height * y / 100 + 10);
+    }
+  }
+
+  function drawShapes() {
+    document.querySelectorAll('.shape, .lbl').forEach((el) => el.remove());
+    let cal = null;
+    try { cal = JSON.parse(localStorage.getItem('joi.calibration2')); } catch {}
+    const r = img.getBoundingClientRect();
+    const wrap = document.querySelector('.wrap');
+    if (!cal) { readout.innerHTML = 'no calibration stored'; return; }
+    const lines = [];
+    for (const key of Object.keys(COLORS)) {
+      const f = cal[key];
+      if (!f) continue;
+      const pts = (f.path && f.path.length >= 4) ? f.path : null;
+      if (pts) {
+        const d = pts.map((p, i) => (i ? 'L' : 'M') + (p.x * r.width).toFixed(1) + ' ' + (p.y * r.height).toFixed(1)).join(' ');
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('class', 'shape');
+        svg.style.left = '0px'; svg.style.top = '0px';
+        svg.setAttribute('width', r.width); svg.setAttribute('height', r.height);
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', d + ' Z');
+        path.setAttribute('stroke', COLORS[key]);
+        path.setAttribute('fill', COLORS[key]);
+        path.setAttribute('fill-opacity', '0.10');
+        svg.appendChild(path);
+        wrap.appendChild(svg);
+      } else {
+        const el = document.createElement('div');
+        el.className = 'shape';
+        el.style.left = (f.cx * r.width) + 'px'; el.style.top = (f.cy * r.height) + 'px';
+        el.style.width = (f.rx * 2 * r.width) + 'px'; el.style.height = (f.ry * 2 * r.width) + 'px';
+        el.style.border = '2.5px solid ' + COLORS[key];
+        el.style.borderRadius = '50%';
+        el.style.transform = 'translate(-50%, -50%)';
+        el.style.background = COLORS[key];
+        el.style.opacity = '0.12';
+        wrap.appendChild(el);
+      }
+      const lbl = document.createElement('div');
+      lbl.className = 'lbl';
+      lbl.style.color = COLORS[key];
+      lbl.style.left = (f.cx * r.width + 4) + 'px';
+      lbl.style.top = ((f.cy - 0.02) * r.height - 14) + 'px';
+      lbl.textContent = LABELS[key] + '  (' + (f.cx * 100).toFixed(0) + ',' + (f.cy * 100).toFixed(0) + ')';
+      wrap.appendChild(lbl);
+      lines.push(key + ': (' + (f.cx * 100).toFixed(1) + '%, ' + (f.cy * 100).toFixed(1) + '%)' + (f.path ? ' path' : ' ellipse'));
+    }
+    readout.innerHTML = '<b>CALIBRATION</b> · ' + img.getAttribute('src').split('/').pop() + '<br>' + lines.join('<br>');
+  }
+
+  function draw() { drawGrid(); if (location.search.indexOf('raw') === -1) drawShapes(); }
+  img.onload = draw;
+  addEventListener('resize', draw);
+
+  /* crop mode: ?crop=face draws the face region into a viewport-filling canvas */
+  const CROP = location.search.match(/crop=([0-9]+)-([0-9]+)-([0-9]+)-([0-9]+)/);
+  if (CROP) {
+    const [fx0, fy0, fx1, fy1] = CROP.slice(1).map(Number);
+    const wrap = document.querySelector('.wrap');
+    wrap.innerHTML = '<canvas id="cropcv"></canvas>';
+    const ccv = document.getElementById('cropcv');
+    img.onload = () => {
+      const W = innerWidth, H = innerHeight;
+      ccv.width = W; ccv.height = H;
+      const ctx = ccv.getContext('2d');
+      const sx = fx0/100 * img.naturalWidth, sy = fy0/100 * img.naturalHeight;
+      const sw = (fx1-fx0)/100 * img.naturalWidth, sh = (fy1-fy0)/100 * img.naturalHeight;
+      const sc = Math.min(W/sw, H/sh);
+      const dw = sw*sc, dh = sh*sc;
+      ctx.drawImage(img, sx, sy, sw, sh, (W-dw)/2, (H-dh)/2, dw, dh);
+      /* map an image-fraction to crop-canvas coords */
+      const M = (fx, fy) => ({ x: (W-dw)/2 + (fx - fx0/100)/((fx1-fx0)/100) * dw, y: (H-dh)/2 + (fy - fy0/100)/((fy1-fy0)/100) * dh });
+      /* draw calibration shapes scaled into the crop */
+      try {
+        const cal = JSON.parse(localStorage.getItem('joi.calibration2'));
+        if (cal) {
+          const CC = { eyeL: '#ffd24a', eyeR: '#ffd24a', browL: '#4de3ff', browR: '#4de3ff', mouth: '#ff6fb0', nose: '#8df0a8' };
+          for (const key of Object.keys(CC)) {
+            const f = cal[key];
+            if (!f || !f.path || !f.path.length) continue;
+            ctx.beginPath();
+            f.path.forEach((p, i) => { const q = M(p.x, p.y); i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); });
+            ctx.closePath();
+            ctx.strokeStyle = CC[key]; ctx.lineWidth = 3;
+            ctx.globalAlpha = 0.9; ctx.stroke(); ctx.globalAlpha = 1;
+            const q = M(f.cx, f.cy);
+            ctx.fillStyle = CC[key]; ctx.font = 'bold 15px monospace';
+            ctx.fillText(key.toUpperCase(), q.x + 8, q.y - 8);
+          }
+        }
+      } catch (e) {}
+      /* percentage grid over the crop (labels map to the CROP's coords) */
+      ctx.font = '16px monospace';
+      for (let i = 0; i <= 10; i++) {
+        const px = (W-dw)/2 + (i/10)*dw;
+        ctx.strokeStyle = 'rgba(255,90,90,0.5)';
+        ctx.beginPath(); ctx.moveTo(px, (H-dh)/2); ctx.lineTo(px, (H+dh)/2); ctx.stroke();
+        ctx.fillStyle = '#ff9090';
+        ctx.fillText(fx0 + (fx1-fx0)*i/10 + '%', px + 4, (H-dh)/2 + 18);
+      }
+      for (let i = 0; i <= 10; i++) {
+        const py = (H-dh)/2 + (i/10)*dh;
+        ctx.strokeStyle = 'rgba(90,160,255,0.5)';
+        ctx.beginPath(); ctx.moveTo((W-dw)/2, py); ctx.lineTo((W+dw)/2, py); ctx.stroke();
+        ctx.fillStyle = '#90c0ff';
+        ctx.fillText(fy0 + (fy1-fy0)*i/10 + '%', (W-dw)/2 + 6, py - 6);
+      }
+      readout.textContent = 'crop x' + fx0 + '-' + fx1 + '% y' + fy0 + '-' + fy1 + '% of ' + img.getAttribute('src').split('/').pop();
+    };
+  }
+</script>
+</body>
+</html>

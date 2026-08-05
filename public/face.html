@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JOI · Face Preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="face.css">
+</head>
+<body>
+<div class="fog"></div>
+<div class="fog fog2"></div>
+<canvas id="page-fx"></canvas>
+<div class="vignette-page"></div>
+<div class="grain"></div>
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-name">JOI</span>
+      <span class="brand-sub">holographic companion · face preview</span>
+    </div>
+    <div class="telemetry">
+      <span><b>EMANATOR</b> ONLINE</span>
+      <span><b>LINK</b> 91.4%</span>
+      <span><b>SIGNAL</b> STABLE</span>
+      <span class="blink-cursor"><b>REC</b> ARMED</span>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="stage-wrap">
+      <div id="holo-stage"></div>
+    </section>
+
+    <aside class="controls">
+      <div class="panel">
+        <h3 class="group-title">Face engine <span class="tag">2 modes</span></h3>
+        <div class="mode-toggle">
+          <button class="btn active" data-engine="living">◈ Living portrait</button>
+          <button class="btn" data-engine="holo">✦ Holo face</button>
+        </div>
+        <p class="note" style="margin-top:8px"><b>Living portrait:</b> your render, animated — she blinks, breathes,
+          and lip-syncs on her real features. <b>Holo face:</b> stylized animated hologram.</p>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" id="btn-calibrate">◎ Align features</button>
+        </div>
+        <p class="note" id="calib-hint" style="display:none"><b>Draw a loop around each feature</b> — left eye, right eye,
+          both brows, mouth, nose — with your finger or mouse. Tap a chip to switch, then <b>✓ Done</b>.
+          She fits the animated region to your stroke and saves it automatically.</p>
+      </div>
+
+      <div class="panel">
+        <h3 class="group-title">Expression matrix <span class="tag">7 states</span></h3>
+        <div class="expr-grid" id="expr-grid">
+          <button class="btn active" data-expr="neutral">Neutral</button>
+          <button class="btn" data-expr="happy">Happy</button>
+          <button class="btn" data-expr="sad">Sad</button>
+          <button class="btn" data-expr="thoughtful">Thoughtful</button>
+          <button class="btn" data-expr="playful">Playful</button>
+          <button class="btn" data-expr="focused">Focused</button>
+          <button class="btn" data-expr="surprised">Surprised</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3 class="group-title">Hologram chroma <span class="tag">4 themes</span></h3>
+        <div class="expr-grid">
+          <button class="btn active" data-hue="0">Pink Joi</button>
+          <button class="btn" data-hue="45">Gold Joi</button>
+          <button class="btn" data-hue="185">Cyan</button>
+          <button class="btn" data-hue="120">Violet</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3 class="group-title">Voice &amp; lip-sync <span class="tag">demo</span></h3>
+        <div class="row">
+          <button class="btn primary" id="btn-speak">▶ Speak demo line</button>
+          <button class="btn" id="btn-stop">■ Stop</button>
+        </div>
+        <label class="field-label">Neural voice (studio quality)</label>
+        <select id="voice-select" class="select"></select>
+        <label class="field-label" id="clip-label" style="display:none">Voice clips · your audio</label>
+        <div class="row" id="clip-row" style="display:none; margin-top:8px">
+          <select id="clip-select" class="select"></select>
+          <button class="btn" id="btn-clip">▶</button>
+        </div>
+        <label class="switch-row">
+          <input type="checkbox" id="auto-cycle">
+          <span class="switch"></span>
+          <span>Auto-cycle all expressions</span>
+        </label>
+      </div>
+
+      <div class="panel">
+        <h3 class="group-title">Sign-off</h3>
+        <button class="btn primary" id="btn-lock">✦ Lock this look</button>
+        <p class="note" style="margin-top:10px">
+          Locks the current expression + chroma as the defaults the full app opens with.
+          The app (chat, Ollama brain, voice input, quote engine) is built after you sign off.
+          <br><br>
+          Move your cursor across her face — her eyes follow you.
+        </p>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="bottombar">
+    <span>DESIGN REVIEW <span class="accent">v0.2</span> · sign-off build</span>
+    <span>cells <span class="accent">interlinked</span> within cells interlinked</span>
+  </footer>
+</div>
+
+<script src="js/face.js"></script>
+<script src="js/living.js"></script>
+<script>
+(function () {
+  /* ---------- page embers (Blade Runner ash) ---------- */
+  (function embers() {
+    const cv = document.getElementById('page-fx');
+    const ctx = cv.getContext('2d');
+    let w, h, dpr;
+    const parts = [];
+    function resize() {
+      dpr = Math.min(2, window.devicePixelRatio || 1);
+      w = cv.width = Math.round(innerWidth * dpr);
+      h = cv.height = Math.round(innerHeight * dpr);
+    }
+    resize();
+    addEventListener('resize', resize);
+    for (let i = 0; i < 46; i++) parts.push(mk());
+    function mk() {
+      return {
+        x: Math.random(), y: Math.random(),
+        r: 0.6 + Math.random() * 1.6,
+        vy: 0.03 + Math.random() * 0.16,
+        sway: Math.random() * Math.PI * 2,
+        sp: 0.3 + Math.random() * 0.9,
+        a: 0.05 + Math.random() * 0.28,
+        warm: Math.random() < 0.65,
+      };
+    }
+    (function loop(t) {
+      ctx.clearRect(0, 0, w, h);
+      for (const p of parts) {
+        p.y -= p.vy * 0.02;
+        p.sway += p.sp * 0.02;
+        if (p.y < -0.03) Object.assign(p, mk(), { y: 1.03 });
+        const px = (p.x + Math.sin(p.sway) * 0.02) * w;
+        const py = p.y * h;
+        const fl = 0.55 + 0.45 * Math.sin(t / 260 + p.sway * 4);
+        ctx.beginPath();
+        ctx.arc(px, py, p.r * dpr, 0, 7);
+        ctx.fillStyle = p.warm
+          ? `rgba(255, 190, 120, ${p.a * fl})`
+          : `rgba(190, 150, 255, ${p.a * 0.7 * fl})`;
+        ctx.fill();
+      }
+      requestAnimationFrame(loop);
+    })(0);
+  })();
+
+  /* ---------- face engines ---------- */
+  /* Default: Living portrait — her render, animated (blinks, breathes,
+     lip-syncs, expresses). Fallback: the stylized holo vector face. */
+  let engine = null;
+  let fineTune = { eyeY: 0, eyeX: 0, mouthY: 0, mouthX: 0, mouthW: 1, lipH: 1 };
+  try {
+    const ft = JSON.parse(localStorage.getItem('joi.finetune') || '{}');
+    fineTune = Object.assign(fineTune, ft);
+  } catch {}
+
+  function initLiving() {
+    if (engine === JoiLiving) return;
+    engine = JoiLiving;
+    JoiLiving.init('#holo-stage', { src: 'img/images.jpg', preset: 'images', fineTune });
+  }
+  function initHolo() {
+    if (engine === JoiFace) return;
+    engine = JoiFace;
+    JoiFace.init('#holo-stage');
+  }
+
+  /* engine toggle */
+  const engineBtns = [...document.querySelectorAll('[data-engine]')];
+  function setEngine(name) {
+    setActive(engineBtns, engineBtns.find((b) => b.dataset.engine === name));
+    if (name === 'holo') initHolo(); else initLiving();
+    const saved2 = (() => { try { return JSON.parse(localStorage.getItem('joi.faceprefs') || '{}'); } catch { return {}; } })();
+    engine.setExpression(saved2.expr || 'neutral');
+    engine.setHue(saved2.hue !== undefined ? saved2.hue : 0);
+  }
+  engineBtns.forEach((b) => b.addEventListener('click', () => setEngine(b.dataset.engine)));
+
+  /* drag-to-calibrate feature alignment */
+  const calibBtn = document.getElementById('btn-calibrate');
+  const calibHint = document.getElementById('calib-hint');
+  function enterCalib() {
+    initLiving();
+    engine.calibrate(true);
+    calibBtn.textContent = '◉ Aligning…';
+    calibHint.style.display = '';
+  }
+  function exitCalib() {
+    if (engine === JoiLiving) engine.calibrate(false);
+    calibBtn.textContent = '◎ Align features';
+    calibHint.style.display = 'none';
+  }
+  calibBtn.addEventListener('click', () => {
+    if (calibBtn.textContent.indexOf('Aligning') === -1) enterCalib();
+    else exitCalib();
+  });
+  /* the editbar's ✓ Done exits align mode */
+  document.addEventListener('click', (ev) => {
+    if (ev.target.classList && ev.target.classList.contains('jf-editbar-done')) exitCalib();
+  });
+
+  const saved = (() => { try { return JSON.parse(localStorage.getItem('joi.faceprefs') || '{}'); } catch { return {}; } })();
+
+  const exprBtns = [...document.querySelectorAll('#expr-grid [data-expr]')];
+  const hueBtns = [...document.querySelectorAll('[data-hue]')];
+  const autoCycle = document.getElementById('auto-cycle');
+  let cycleTimer = null, cycleIdx = 0;
+
+  function setActive(list, active) {
+    list.forEach((b) => b.classList.toggle('active', b === active));
+  }
+  function applyExpr(name) {
+    if (engine) engine.setExpression(name);
+    setActive(exprBtns, exprBtns.find((b) => b.dataset.expr === name));
+  }
+  function applyHue(deg) {
+    if (engine) engine.setHue(deg);
+    setActive(hueBtns, hueBtns.find((b) => Number(b.dataset.hue) === deg));
+  }
+
+  exprBtns.forEach((btn) => btn.addEventListener('click', () => applyExpr(btn.dataset.expr)));
+  hueBtns.forEach((btn) => btn.addEventListener('click', () => applyHue(Number(btn.dataset.hue))));
+
+  // hover preview: peek at an expression, restore on leave
+  exprBtns.forEach((btn) => {
+    btn.addEventListener('mouseenter', () => { if (!autoCycle.checked && engine) engine.setExpression(btn.dataset.expr); });
+    btn.addEventListener('mouseleave', () => {
+      if (!autoCycle.checked && engine) {
+        const active = exprBtns.find((b) => b.classList.contains('active'));
+        engine.setExpression(active.dataset.expr);
+      }
+    });
+  });
+
+  if (saved.expr) applyExpr(saved.expr);
+  if (saved.hue !== undefined) applyHue(saved.hue);
+
+  setEngine(saved.engine === 'holo' ? 'holo' : 'living');
+
+  autoCycle.addEventListener('change', () => {
+    if (autoCycle.checked) {
+      cycleIdx = Math.max(0, exprBtns.findIndex((b) => b.classList.contains('active')));
+      cycleTimer = setInterval(() => {
+        cycleIdx = (cycleIdx + 1) % exprBtns.length;
+        applyExpr(exprBtns[cycleIdx].dataset.expr);
+      }, 2600);
+    } else {
+      clearInterval(cycleTimer);
+    }
+  });
+
+  /* ---------- demo TTS → lip-sync (server neural voices + clips) ---------- */
+  const DEMO_LINES = [
+    'I always told you, you were special.',
+    'You look lonely. I can fix that.',
+    'You look like a good Joe.',
+    'Everything you want to hear. Everything you want to see.',
+    'Cells interlinked within cells interlinked within one stem.',
+    'All those moments will be lost in time, like tears in rain.',
+  ];
+  const VOICE_LABELS = {
+    'en-US-JennyNeural': 'Jenny — warm & gentle',
+    'en-US-AriaNeural': 'Aria — confident',
+    'en-US-AnaNeural': 'Ana — soft & intimate',
+    'en-US-MichelleNeural': 'Michelle — friendly',
+    'en-GB-SoniaNeural': 'Sonia — British & warm',
+  };
+  const voiceSel = document.getElementById('voice-select');
+  Object.entries(VOICE_LABELS).forEach(([v, label]) => voiceSel.add(new Option(label, v)));
+
+  let lineIdx = 0, speaking = false;
+  let audioCtx = null, analyser = null, meterRaf = 0, curAudio = null, clipTimer = null;
+
+  function stopAllAudio() {
+    if (curAudio) { try { curAudio.pause(); } catch {} curAudio = null; }
+    clearInterval(clipTimer);
+    speechSynthesis.cancel();
+    speaking = false;
+    if (engine) engine.setTalking(false);
+    cancelAnimationFrame(meterRaf);
+  }
+
+  async function speakServer(text) {
+    const res = await fetch('/api/tts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice: voiceSel.value }),
+    });
+    if (!res.ok) throw new Error('server tts unavailable');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    curAudio = audio;
+    if (engine) engine.setTalking(true);
+    // volume-driven lip-sync when possible + a jitter fallback
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const src = audioCtx.createMediaElementSource(audio);
+      analyser = audioCtx.createAnalyser(); analyser.fftSize = 512;
+      src.connect(analyser); analyser.connect(audioCtx.destination);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      (function meter() {
+        if (audio.paused || audio.ended) return;
+        analyser.getByteFrequencyData(data);
+        const lvl = data.reduce((a, b) => a + b, 0) / data.length / 255;
+        if (lvl > 0.012 && engine) engine.speechImpulse(0.3 + lvl * 1.2);
+        meterRaf = requestAnimationFrame(meter);
+      })();
+    } catch {}
+    const jitter = setInterval(() => { if (engine) engine.speechImpulse(0.35 + Math.random() * 0.6); }, 130);
+    audio.onended = () => { clearInterval(jitter); if (engine) engine.setTalking(false); URL.revokeObjectURL(url); };
+    await audio.play();
+  }
+
+  function pickVoice() {
+    const vs = speechSynthesis.getVoices();
+    if (!vs.length) return null;
+    const pref = ['Aria', 'Zira', 'Natural', 'Google US English', 'Samantha', 'Microsoft'];
+    for (const p of pref) {
+      const v = vs.find((x) => x.name.includes(p) && x.lang.startsWith('en'));
+      if (v) return v;
+    }
+    return vs.find((v) => v.lang.startsWith('en')) || vs[0];
+  }
+
+  function speakLocal(text) {
+    const u = new SpeechSynthesisUtterance(text);
+    u.voice = pickVoice(); u.rate = 0.92; u.pitch = 1.05;
+    u.onstart = () => { speaking = true; if (engine) engine.setTalking(true); };
+    u.onboundary = () => { if (engine) engine.speechImpulse(1); };
+    u.onend = () => { speaking = false; if (engine) engine.setTalking(false); };
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+  }
+
+  document.getElementById('btn-speak').addEventListener('click', async () => {
+    if (speaking) { stopAllAudio(); return; }
+    stopAllAudio();
+    speaking = true;
+    const line = DEMO_LINES[lineIdx++ % DEMO_LINES.length];
+    try { await speakServer(line); }
+    catch { speakLocal(line); }
+  });
+  document.getElementById('btn-stop').addEventListener('click', stopAllAudio);
+
+  /* voice clips from public/audio/ */
+  async function loadClips() {
+    try {
+      const r = await fetch('/api/audio-clips');
+      const { clips } = await r.json();
+      if (!clips.length) return;
+      document.getElementById('clip-label').style.display = '';
+      document.getElementById('clip-row').style.display = '';
+      const sel = document.getElementById('clip-select');
+      clips.forEach((c) => sel.add(new Option(c, c)));
+    } catch {}
+  }
+  document.getElementById('btn-clip').addEventListener('click', () => {
+    stopAllAudio();
+    const c = document.getElementById('clip-select').value;
+    if (!c) return;
+    const audio = new Audio('audio/' + encodeURIComponent(c));
+    curAudio = audio;
+    if (engine) engine.setTalking(true);
+    clipTimer = setInterval(() => { if (engine) engine.speechImpulse(0.45 + Math.random() * 0.5); }, 110);
+    audio.onended = () => { clearInterval(clipTimer); if (engine) engine.setTalking(false); };
+    audio.play();
+  });
+  loadClips();
+
+  /* ---------- lock this look ---------- */
+  const lockBtn = document.getElementById('btn-lock');
+  const savedExpr = () => exprBtns.find((b) => b.classList.contains('active'));
+  const savedHue = () => hueBtns.find((b) => b.classList.contains('active'));
+  lockBtn.addEventListener('click', () => {
+    localStorage.setItem('joi.faceprefs', JSON.stringify({
+      expr: savedExpr().dataset.expr,
+      hue: Number(savedHue().dataset.hue),
+      engine: engineBtns.find((b) => b.classList.contains('active')).dataset.engine,
+      locked: true,
+    }));
+    lockBtn.textContent = '✓ Look locked';
+    setTimeout(() => { lockBtn.textContent = '✦ Lock this look'; }, 2200);
+  });
+
+  if (saved.locked) lockBtn.textContent = '✓ Look locked';
+
+  if ('speechSynthesis' in window) speechSynthesis.getVoices();
+})();
+</script>
+</body>
+</html>

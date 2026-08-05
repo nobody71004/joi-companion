@@ -1,0 +1,23 @@
+# dependencies / tooling
+node_modules/
+
+# local TTS engine (regenerable via `npm run setup:tts`)
+venv/
+
+# her second brain — private by design, never committed
+data/
+
+# build output (the portable EXE is tracked; the unpacked dir is not)
+dist/win-unpacked/
+dist/builder-debug.yml
+dist/*.yml
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
+.freebuff/

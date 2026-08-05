@@ -1,0 +1,50 @@
+{
+  "name": "joi-companion",
+  "version": "1.1.0",
+  "description": "JOI — holographic AI companion with a speaking face, voice, coding intelligence, and a Blade Runner soul.",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "node server.js",
+    "app": "electron .",
+    "dist:win": "electron-builder --win portable",
+    "setup:tts": "python -m venv venv && venv/Scripts/python.exe -m pip install edge-tts"
+  },
+  "author": "JOI",
+  "license": "MIT",
+  "build": {
+    "appId": "com.joi.companion",
+    "productName": "JOI Companion",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "server.js",
+      "electron/**/*",
+      "public/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "venv",
+        "to": "venv",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "JOI-Companion-${version}.exe"
+    },
+    "portable": {
+      "artifactName": "JOI-Companion.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  }
+}

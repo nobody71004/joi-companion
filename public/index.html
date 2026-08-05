@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JOI · Holographic Companion</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="face.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="fog"></div>
+<div class="fog fog2"></div>
+<canvas id="page-fx"></canvas>
+<div class="vignette-page"></div>
+<div class="grain"></div>
+
+<div class="app chat-app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-name">JOI</span>
+      <span class="brand-sub" id="brand-sub">holographic companion</span>
+    </div>
+    <div class="telemetry">
+      <span><b id="tl-model">BRAIN</b> <span id="tl-model-name">BOOTING</span></span>
+      <span><b>GEN</b> <span id="tl-tps">— t/s</span></span>
+      <span><b>LINK</b> <span id="tl-link">91.4%</span></span>
+      <span><b>SIGNAL</b> <span id="tl-signal">STABLE</span></span>
+      <span class="blink-cursor" id="tl-rec" style="display:none"><b>REC</b> LISTENING</span>
+    </div>
+    <div class="ctx-wrap">
+      <div class="ctx-label"><b>CTX</b> <span id="ctx-used">0</span> / <span id="ctx-limit">—</span> tok</div>
+      <div class="ctx-track"><div class="ctx-fill" id="ctx-fill"></div></div>
+    </div>
+    <button type="button" class="btn gear-btn" id="btn-settings" title="Settings">⚙</button>
+  </header>
+
+  <main class="chat-main">
+    <!-- left: the living portrait -->
+    <section class="chat-stage-col">
+      <div class="stage-frame">
+        <div id="holo-stage"></div>
+      </div>
+      <div class="expr-strip" id="expr-strip">
+        <button class="chip active" data-expr="neutral">Neutral</button>
+        <button class="chip" data-expr="happy">Happy</button>
+        <button class="chip" data-expr="sad">Sad</button>
+        <button class="chip" data-expr="thoughtful">Thoughtful</button>
+        <button class="chip" data-expr="playful">Playful</button>
+        <button class="chip" data-expr="focused">Focused</button>
+        <button class="chip" data-expr="surprised">Surprised</button>
+      </div>
+      <div class="stage-tools">
+        <button class="btn small" id="btn-calibrate" title="Align her features to the render">◎ Align features</button>
+        <button class="btn small" id="btn-quote" title="She says a Blade Runner line">❝ Quote</button>
+        <button class="btn small" id="btn-stop" title="Stop her speaking">■ Stop</button>
+      </div>
+      <div class="voice-quick">
+        <label class="quick-label" for="quick-voice">Voice</label>
+        <select id="quick-voice" class="select quick-select" title="Change her speaking voice"></select>
+      </div>
+      <p class="note center" id="calib-hint" style="display:none">
+        <b>Draw a loop around each feature</b> — L eye, R eye, L brow, R brow, mouth, nose.
+        Tap a chip to switch, then <b>✓ Done</b>. She keeps your exact drawn shape.
+      </p>
+    </section>
+
+    <!-- right: chat -->
+    <section class="chat-col">
+      <div class="chat-log" id="chat-log" aria-live="polite"></div>
+      <div class="chat-input-row">
+        <button type="button" class="btn mic-btn" id="btn-mic" title="Speak to her">🎤</button>
+        <textarea id="chat-input" rows="1" placeholder="Talk to JOI… (or press 🎤 and speak)"></textarea>
+        <button type="button" class="btn send-btn" id="btn-send" title="Send">➤</button>
+      </div>
+    </section>
+  </main>
+
+  <footer class="bottombar">
+    <span>BRAIN <span class="accent" id="foot-model">local · qwen2.5-coder</span></span>
+    <span>cells <span class="accent">interlinked</span> within cells interlinked</span>
+  </footer>
+</div>
+
+<!-- ============ settings drawer ============ -->
+<div class="drawer-backdrop" id="drawer-backdrop"></div>
+<aside class="drawer" id="settings-drawer" aria-label="Settings">
+  <div class="drawer-head">
+    <h2>Settings</h2>
+    <button type="button" class="btn small" id="btn-drawer-close">✕</button>
+  </div>
+  <div class="drawer-body">
+
+    <div class="panel">
+      <h3 class="group-title">Brain <span class="tag">provider</span></h3>
+      <label class="field-label">Provider</label>
+      <select id="set-provider" class="select"></select>
+      <label class="field-label">Model</label>
+      <div class="row">
+        <select id="set-model" class="select"></select>
+        <button type="button" class="btn small" id="btn-refresh-models" title="Refresh model list">⟳</button>
+      </div>
+      <label class="field-label" id="lbl-base">Base URL</label>
+      <input type="text" id="set-base" class="input" placeholder="http://localhost:11434/v1" autocomplete="off">
+      <label class="field-label" id="lbl-key">API key (stays on this machine)</label>
+      <input type="password" id="set-key" class="input" placeholder="sk-…" autocomplete="off">
+      <label class="field-label">Temperature</label>
+      <input type="range" id="set-temp" min="0" max="1.4" step="0.05" value="0.7">
+      <span class="range-val" id="temp-val">0.70</span>
+      <p class="note" id="ollama-note">Ollama detected — local models listed. Fully offline &amp; free.</p>
+    </div>
+
+    <div class="panel">
+      <h3 class="group-title">Voice <span class="tag">neural</span></h3>
+      <label class="field-label">Speaking voice</label>
+      <select id="set-voice" class="select"></select>
+      <label class="switch-row">
+        <input type="checkbox" id="set-auto-speak" checked>
+        <span class="switch"></span>
+        <span>She speaks her replies aloud</span>
+      </label>
+      <p class="note">Studio-quality neural voices via Microsoft Edge (free). If TTS is not set up yet, run <code>npm run setup:tts</code> in the joi-companion folder.</p>
+    </div>
+
+    <div class="panel">
+      <h3 class="group-title">Second brain <span class="tag">server-persistent</span></h3>
+      <p class="note" id="mem-summary">No name yet. Tell her your name and she will remember.</p>
+      <button type="button" class="btn small" id="btn-forget">Clear the brain</button>
+    </div>
+
+    <div class="panel">
+      <h3 class="group-title">Server <span class="tag">control</span></h3>
+      <div class="row">
+        <button type="button" class="btn" id="btn-server-restart" title="Restart the local server process">⟳ Restart server</button>
+        <button type="button" class="btn danger" id="btn-server-stop" title="Shut the local server down">⏻ Stop server</button>
+      </div>
+      <p class="note">Stopping shuts the server down — the page then shows a Start screen.
+        Restart spawns a fresh process on the same port and auto-reconnects.
+        You can also use <code>Start-JOI.bat</code> / <code>Stop-JOI.bat</code> in the joi-companion folder.</p>
+    </div>
+
+  </div>
+</aside>
+
+<!-- ============ offline splash ============ -->
+<div class="offline-splash" id="offline-splash" style="display:none">
+  <div class="offline-card">
+    <div class="offline-ring"></div>
+    <h1>JOI</h1>
+    <p>The hologram is offline.</p>
+    <p class="note">Start the server with <code>Start-JOI.bat</code> (Windows) or<br>
+      <code>cd joi-companion &amp;&amp; npm start</code>, then this page reconnects by itself.</p>
+    <button type="button" class="btn primary big" id="btn-server-start">▶ Start server &amp; reconnect</button>
+    <p class="note" id="offline-msg">Checking for server…</p>
+  </div>
+</div>
+
+<script src="js/face.js"></script>
+<script src="js/living.js"></script>
+<script src="js/quotes.js"></script>
+<script src="js/memory.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
