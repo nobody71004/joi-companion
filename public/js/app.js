@@ -224,15 +224,22 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   }
 
   /* ---------------- TTS with lip-sync ----------------
-     INCREMENTAL: she speaks sentence-by-sentence as the reply streams
-     in, so her voice starts almost immediately instead of waiting for
-     the whole message. Each sentence is decoded via Web Audio and her
-     mouth is driven by the REAL decoded samples.
-     A tiny queue (max 3) keeps order without piling up TTS work. */
+     INCREMENTAL + BATCHED: she speaks sentence-by-sentence as the reply
+     streams in, so her voice starts almost immediately instead of waiting
+     for the whole message. Nearby sentences are grouped into ONE /api/tts
+     call (a single edge-tts process) instead of spawning a separate python
+     process per sentence — that process spawn was the lag you could hear.
+     Each batch is decoded via Web Audio and her mouth is driven by the
+     REAL decoded samples. */
   let audioCtx = null, analyser = null, meterRaf = 0, curSource = null;
-  let busy = false;           // a sentence is currently being synthesized+played
-  const speakQueue = [];      // sentences waiting
-  let speechGen = 0;          // generation counter to invalidate stale sentences
+  let busy = false;           // a batch is currently being synthesized+played
+  const speakQueue = [];      // batched speech chunks waiting to play
+  let speechGen = 0;          // generation counter to invalidate stale speech
+  let pendingBatch = [];      // sentences accumulating for one batched TTS call
+  let batchTimer = 0;
+  const MAX_BATCH_SENT = 4;   // flush when this many sentences pile up
+  const MAX_BATCH_CHARS = 240; // …or this many characters
+  const BATCH_IDLE_MS = 700;  // …or after this long without a new sentence
 
   function cancelAudio() {
     if (curSource) { try { curSource.stop(); } catch {} curSource = null; }
@@ -240,9 +247,15 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     if (engine) engine.setTalking(false);
     cancelAnimationFrame(meterRaf);
   }
+  function clearBatch() {
+    clearTimeout(batchTimer);
+    batchTimer = 0;
+    pendingBatch = [];
+  }
   function stopSpeaking() {
     speechGen++;
     speakQueue.length = 0;
+    clearBatch();
     busy = false;
     cancelAudio();
   }
@@ -302,17 +315,31 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     pump();
   }
 
-  function queueSpeech(sentence) {
-    if (!sentence) return;
+  function flushBatch() {
+    clearTimeout(batchTimer);
+    batchTimer = 0;
+    if (!pendingBatch.length) return;
+    const text = pendingBatch.join(' ');
+    pendingBatch = [];
     const g = speechGen;
-    speakQueue.push({ text: sentence, g });
-    /* The model streams sentences faster than neural TTS can synthesize
-       them, so a tiny cap silently DROPPED the middle/end of her replies
-       — she never finished speaking. Keep a generous backlog instead:
-       nothing is dropped for normal replies, and the whole reply is
-       spoken in order even if she lags a few seconds behind the text. */
+    speakQueue.push({ text, g });
+    /* generous backlog: nothing is dropped for normal replies, and the
+       whole reply is spoken in order even if she lags a few seconds. */
     if (speakQueue.length > 16) speakQueue.shift();
     pump();
+  }
+
+  function queueSpeech(sentence) {
+    if (!sentence) return;
+    pendingBatch.push(sentence);
+    const chars = pendingBatch.join(' ').length;
+    /* flush early when the batch is big enough, or when nothing is
+       playing yet (so her first sentence still starts almost instantly) */
+    if (pendingBatch.length >= MAX_BATCH_SENT || chars >= MAX_BATCH_CHARS) return flushBatch();
+    if (!busy && speakQueue.length === 0) return flushBatch();
+    /* slow stream: flush after a short pause so the tail never stalls */
+    clearTimeout(batchTimer);
+    batchTimer = setTimeout(flushBatch, BATCH_IDLE_MS);
   }
 
   function pump() {
@@ -401,7 +428,7 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   function browserFallback(text) {
     try {
       return new Promise((resolve) => {
-        const u = new SpeechSynthesisUtterance(text.slice(0, 300));
+        const u = new SpeechSynthesisUtterance(text.slice(0, 2000));
         u.rate = 0.94; u.pitch = 1.12; /* slight lift keeps her sounding female */
         if (fallbackVoice) u.voice = fallbackVoice;
         u.onstart = () => { if (engine) engine.setTalking(true); };
@@ -416,7 +443,7 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   /* ---------------- quotes ---------------- */
   function sayQuote(cat) {
     initEngine();
-    const q = cat && JOIQuotes.LIB[cat] ? JOIQuotes.forCategory(cat) : JOIQuotes.trigger('deep');
+    const q = cat && JOIQuotes.LIB[cat] ? JOIQuotes.forCategory(cat) : JOIQuotes.randomLine();
     const b = addMsg('joi quote', `<span class="em">Joi · Blade Runner</span>${mdInline(mdEscape(q))}`, 'quote');
     void b;
     setExpr('playful');
@@ -560,12 +587,14 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
             '<div class="em" style="margin-top:6px;font-size:11px">⚠ her reply was cut off mid-generation — enable CPU mode in Settings, or pick a smaller model, to keep her stable.</div>';
         }
       }
-      /* speak whatever is left over (last fragment of the reply) */
+      /* speak whatever is left over (last fragment of the reply), then
+         flush the final batch promptly instead of waiting on the timer */
       if (streamTail.trim()) {
         const tail = streamTail.replace(/```[^`]*/g, ' ').replace(/[*_`#>`~]/g, '').trim();
         if (paused) pausedBuf += ' ' + tail; else queueSpeech(tail);
         streamTail = '';
       }
+      flushBatch();
       if (!started) throw new Error('Empty reply from the model.');
       think.remove();
       if (currentBubble) currentBubble.innerHTML = mdRender(acc);

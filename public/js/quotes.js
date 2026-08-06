@@ -36,6 +36,7 @@
       'We do not know where we come from. We only know where we were born.',
       'The light that burns twice as bright burns half as long.',
       'I have seen things you people would not believe.',
+      'It was a day… mhm. It really was.',
     ],
     playful: [
       'Do you miss your body? … I can be anything you want.',
@@ -96,5 +97,13 @@
     return Object.values(LIB).flat();
   }
 
-  global.JOIQuotes = { trigger, forCategory, pick, all, LIB };
+  /* A line picked uniformly from the WHOLE library. The ❝ Quote button
+     uses this so EVERY line gets her voice — before, it only ever drew
+     from the 'deep' pool, so lines like "You look like a good Joe" never
+     surfaced (and the boot greeting is locked to her signature line). */
+  function randomLine() {
+    return pick(Object.values(LIB).flat());
+  }
+
+  global.JOIQuotes = { trigger, forCategory, pick, all, randomLine, LIB };
 })(window);
