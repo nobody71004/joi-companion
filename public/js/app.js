@@ -602,6 +602,10 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
       history.push({ role: 'assistant', text: acc });
       setCtx(promptEst + genTokens);
       stopGenTimer(genTokens);
+      /* a clean reply proves this model runs — remember it as a safe pick */
+      if ((window.__fitByModel || {})[prefs.model] !== false) {
+        prefs.lastGoodModel = prefs.model; savePrefs();
+      }
       /* second brain: store the exchange as an episode */
       const ep = JOIMemory.episodeFrom(text, acc);
       if (ep) { JOIMemory.remember(ep.text, { category: 'episode' }); refreshMemUI(); }
@@ -757,26 +761,52 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
         const r = await fetch('/api/models');
         const d = await r.json();
         modelSel.innerHTML = '';
-        if (d.running && d.models.length) {
-          const gpuLine = gpuFitNote(d.gpu);
-          d.models.forEach((m) => {
-            const warn = (d.gpu && d.gpu.hasGpu && m.sizeGb && !m.fits) ? ' ⚠ big' : '';
-            modelSel.add(new Option(m.name + warn, m.name));
-            if (m.contextLength) window.__ctxByModel = Object.assign(window.__ctxByModel || {}, { [m.name]: m.contextLength });
-          });
-          if (!d.models.some((m) => m.name === prefs.model)) prefs.model = d.models[0].name;
-          modelSel.value = prefs.model;
-          $('#tl-model-name').textContent = prefs.model;
-          $('#foot-model').textContent = 'local · ' + prefs.model;
-          const cl = (window.__ctxByModel || {})[prefs.model];
-          if (cl) { ctxLimit = cl; ctxLimitEl.textContent = fmtTok(cl); }
-          const big = d.models.filter((m) => d.gpu && d.gpu.hasGpu && m.sizeGb && !m.fits);
-          const cpuLine = prefs.forceCPU ? ' · CPU mode ON (no GPU)' : '';
-          const warnLine = big.length
-            ? ` ${big.map((m) => m.sizeGb + ' GB ' + m.name.split('/').pop()).join(', ')} ${big.length === 1 ? 'is' : 'are'} bigger than your VRAM — use CPU mode or a smaller model to avoid crashes.`
-            : '';
-          $('#ollama-note').textContent = 'Ollama detected — ' + d.models.length + ' local model(s). ' + gpuLine + cpuLine + warnLine;
-        } else {
+      if (d.running && d.models.length) {
+        const gpu = d.gpu || null;
+        const gpuLine = gpuFitNote(gpu);
+        const risky = (m) => !!(gpu && gpu.hasGpu && m.sizeGb && !m.fits);
+        d.models.forEach((m) => {
+          modelSel.add(new Option(m.name + (risky(m) ? ' ⚠ big' : ''), m.name));
+          if (m.contextLength) window.__ctxByModel = Object.assign(window.__ctxByModel || {}, { [m.name]: m.contextLength });
+          window.__fitByModel = Object.assign(window.__fitByModel || {}, { [m.name]: !risky(m) });
+        });
+        if (!d.models.some((m) => m.name === prefs.model)) prefs.model = d.models[0].name;
+
+        /* AUTO-SELECT A SAFE MODEL — if the current pick is a crash risk on
+           this GPU (bigger than the free VRAM) and a fitting model exists,
+           switch to the best fitting one and tell her why. Skipped while
+           CPU mode is on, where big models are crash-proof. */
+        const fitting = d.models.filter((m) => !risky(m));
+        const curRisky = !prefs.forceCPU && !!d.models.find((m) => m.name === prefs.model && risky(m));
+        if (curRisky && fitting.length) {
+          const from = prefs.model;
+          const knownGood = (prefs.lastGoodModel && fitting.some((m) => m.name === prefs.lastGoodModel))
+            ? prefs.lastGoodModel
+            : null;
+          /* best = the model she has proven she can run, else the largest
+             that fits (most capable without crashing) */
+          prefs.model = knownGood || fitting.slice().sort((a, b) => (b.sizeGb || 0) - (a.sizeGb || 0))[0].name;
+          savePrefs();
+          addMsg('joi', `<span class="em">system</span>${mdInline(mdEscape(`Switched you to ${prefs.model} — ${from} is bigger than your GPU's VRAM and would crash. She runs best on a model that fits (no ⚠ flag).`))}`, 'auto-recovery');
+        }
+
+        modelSel.value = prefs.model;
+        $('#tl-model-name').textContent = prefs.model;
+        $('#foot-model').textContent = 'local · ' + prefs.model;
+        const cl = (window.__ctxByModel || {})[prefs.model];
+        if (cl) { ctxLimit = cl; ctxLimitEl.textContent = fmtTok(cl); }
+        const big = d.models.filter(risky);
+        const selRisky = !prefs.forceCPU && !!d.models.find((m) => m.name === prefs.model && risky(m));
+        const cpuLine = prefs.forceCPU ? ' · CPU mode ON (no GPU)' : '';
+        const warnLine = selRisky
+          ? ` ⚠ <b>${prefs.model.split('/').pop()} is bigger than your VRAM</b> — she would crash or crawl on it. Pick a model without the ⚠ flag.`
+          : (big.length
+              ? ` ${big.map((m) => m.sizeGb + ' GB ' + m.name.split('/').pop()).join(', ')} ${big.length === 1 ? 'is' : 'are'} bigger than your VRAM — use CPU mode or a smaller model to avoid crashes.`
+              : '');
+        const noteEl = $('#ollama-note');
+        noteEl.textContent = 'Ollama detected — ' + d.models.length + ' local model(s). ' + gpuLine + cpuLine + warnLine;
+        noteEl.classList.toggle('risky', !!selRisky);
+      } else {
           modelSel.add(new Option('(Ollama not running — start it first)', ''));
           $('#ollama-note').textContent = 'Ollama is not running. Start it (ollama serve) then refresh.';
         }
@@ -789,6 +819,20 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   }
   modelSel.addEventListener('change', () => {
     prefs.model = modelSel.value; savePrefs();
+    /* remember a model the user chose that isn't a crash risk, so future
+       auto-switches can come back to it */
+    if ((window.__fitByModel || {})[modelSel.value] !== false) {
+      prefs.lastGoodModel = modelSel.value; savePrefs();
+    }
+    /* instant warning if the user just picked a crash-risk model (unless
+       CPU mode makes it safe) — the next refresh auto-switches away */
+    const noteEl2 = $('#ollama-note');
+    if ((window.__fitByModel || {})[modelSel.value] === false && !prefs.forceCPU) {
+      noteEl2.textContent = '⚠ ' + modelSel.value.split('/').pop() + ' is bigger than your VRAM — she would crash or crawl on it. Pick a model without the ⚠ flag, or turn on CPU mode.';
+      noteEl2.classList.add('risky');
+    } else {
+      noteEl2.classList.remove('risky');
+    }
     $('#tl-model-name').textContent = prefs.model; $('#foot-model').textContent = prefs.model;
     const cl = (window.__ctxByModel || {})[prefs.model];
     if (cl) { ctxLimit = cl; ctxLimitEl.textContent = fmtTok(cl); setCtx(ctxUsed); }

@@ -382,3 +382,12 @@ input[type="range"] { width: 100%; accent-color: #ff9ecb; margin-top: 6px; }
   .msg { max-width: 94%; }
   body { overflow-y: auto; }
 }
+
+/* risky-model warning in the Settings brain panel */
+.note.risky {
+  color: #ffb1c4;
+  border: 1px solid rgba(255, 90, 130, 0.45);
+  background: rgba(255, 60, 100, 0.10);
+  padding: 7px 9px;
+  border-radius: 8px;
+}
