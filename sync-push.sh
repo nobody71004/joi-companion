@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # ============================================================
-#  JOI — sync & push
-#  Rebuilds the EXE, syncs the project into the public repo
-#  (joi-companion-clean), commits and pushes to GitHub.
+#  JOI — sync, push & release
+#  Rebuilds the EXE, auto-bumps the version, syncs the project
+#  into the public repo (joi-companion-clean), commits, pushes,
+#  then creates a tagged GitHub Release with the EXE attached.
 #
 #  Usage:
-#    ./sync-push.sh                 # default commit message
-#    ./sync-push.sh "message text"  # custom commit message
+#    ./sync-push.sh                       # patch bump (1.1.0 → 1.1.1)
+#    ./sync-push.sh "message"             # custom commit message, patch bump
+#    ./sync-push.sh "message" --minor     # minor bump (1.1.0 → 1.2.0)
+#    ./sync-push.sh "message" --major     # major bump (1.1.0 → 2.0.0)
+#    ./sync-push.sh "message" --version=1.5.0   # explicit version
 #
 #  NEVER copies data/ (her second brain stays private).
 # ============================================================
@@ -18,7 +22,7 @@ BRANCH="main"
 REPO="nobody71004/joi-companion"
 
 echo ""
-echo "  ✦  JOI sync & push"
+echo "  ✦  JOI sync & push & release"
 echo "  ─────────────────────────────────────"
 echo "  source : $SRC"
 echo "  target : $DST"
@@ -37,7 +41,34 @@ echo "  · syntax-checking…"
 done)
 echo "    ✓ all JS clean"
 
-# ---- 2. rebuild the EXE with the latest code ---------------
+# ---- 2. version bump ---------------------------------------
+VBUMP="${2:-patch}"
+case "$VBUMP" in
+  --major)         VKIND=major ;;
+  --minor)         VKIND=minor ;;
+  --version=*)     VKIND=explicit; VEXPLICIT="${VBUMP#--version=}" ;;
+  *)               VKIND=patch ;;
+esac
+
+CUR_VER=$(cd "$SRC" && node -p "require('./package.json').version")
+IFS=. read -r MAJ MIN PAT <<< "$CUR_VER"
+NEW_VER=""
+case "$VKIND" in
+  major)    MAJ=$((MAJ + 1)); MIN=0; PAT=0 ;;
+  minor)    MIN=$((MIN + 1)); PAT=0 ;;
+  explicit) NEW_VER="$VEXPLICIT" ;;
+  *)        PAT=$((PAT + 1)) ;;
+esac
+[ -z "$NEW_VER" ] && NEW_VER="$MAJ.$MIN.$PAT"
+echo "  · version $CUR_VER → $NEW_VER"
+(cd "$SRC" && node -e "
+  const fs = require('fs');
+  const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+  p.version = '$NEW_VER';
+  fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+")
+
+# ---- 3. rebuild the EXE with the latest code ---------------
 # If JOI is running, its EXE file is locked and can't be overwritten —
 # close the app first (your chat + brain are safe on the server).
 if tasklist 2>/dev/null | grep -qiE 'JOI[- ]Companion'; then
@@ -55,7 +86,7 @@ fi
 EXE_MB=$(du -m "$SRC/dist/JOI-Companion.exe" | awk '{print $1}')
 echo "    ✓ EXE rebuilt ($EXE_MB MB)"
 
-# ---- 3. sync source into the clean repo (no data/, venv, modules)
+# ---- 4. sync source into the clean repo (no data/, venv, modules)
 echo "  · syncing source…"
 cp "$SRC/server.js" "$SRC/package.json" "$SRC/Start-JOI.bat" "$SRC/Stop-JOI.bat" "$DST/"
 cp -r "$SRC/electron/." "$DST/electron/"
@@ -66,7 +97,7 @@ cp "$SRC/dist/JOI-Companion.exe" "$DST/dist/"
 cp "$SRC/sync-push.sh" "$SRC/sync-push.bat" "$DST/" 2>/dev/null || true
 echo "    ✓ synced (brain data/ deliberately excluded)"
 
-# ---- 4. commit + push --------------------------------------
+# ---- 5. commit + push --------------------------------------
 cd "$DST"
 if [ -z "$(git status --porcelain)" ]; then
   echo "  · nothing changed since the last push — skipping commit"
@@ -74,7 +105,7 @@ if [ -z "$(git status --porcelain)" ]; then
   exit 0
 fi
 
-MSG="${1:-JOI update — rebuilt EXE + latest app}"
+MSG="${1:-JOI v$NEW_VER — rebuilt EXE + latest app}"
 echo "  · committing: $MSG"
 git add -A
 git -c user.name=Matthew -c user.email=mattb@example.com commit -m "$MSG" >/dev/null 2>&1
@@ -84,8 +115,23 @@ if git push origin "$BRANCH" 2>&1 | tail -2; then
   SHA=$(git log --oneline -1 | awk '{print $1}')
   echo ""
   echo "  ✓ pushed — $SHA"
-  echo "    https://github.com/$REPO"
 else
   echo "  ✖ push failed — commit exists locally: $(git log --oneline -1)"
   exit 1
 fi
+
+# ---- 6. tag + GitHub Release ---------------------------------
+TAG="v$NEW_VER"
+echo "  · tagging $TAG…"
+git tag -a "$TAG" -m "$MSG" 2>/dev/null || true
+git push origin "$TAG" 2>&1 | tail -1
+
+echo "  · creating GitHub Release $TAG…"
+if gh release view "$TAG" >/dev/null 2>&1; then
+  echo "    ✓ release $TAG already exists"
+else
+  gh release create "$TAG" "dist/JOI-Companion.exe" \
+    --title "JOI $NEW_VER" \
+    --generate-notes 2>&1 | tail -2
+fi
+echo "  ✓ release — https://github.com/$REPO/releases/tag/$TAG"

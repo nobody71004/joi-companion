@@ -1140,6 +1140,15 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     serverUp = true;
     initEngine();
     ctxLimitEl.textContent = fmtTok(ctxLimit);
+    /* updates: show the running build version next to the download button */
+    try {
+      const vr = await fetch('/api/version');
+      const vj = await vr.json();
+      if (vj && vj.version) {
+        const el = $('#upd-version');
+        if (el) el.textContent = `You're on v${vj.version} — the latest build is always on the Releases page.`;
+      }
+    } catch {}
     /* second brain: pull server memory (survives browser resets) */
     await JOIMemory.pullServer();
     refreshMemUI();

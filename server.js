@@ -677,6 +677,11 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url.pathname === '/api/server/restart') return handleServerRestart(res);
   if (req.method === 'POST' && url.pathname === '/api/server/start') return handleServerStart(res);
   if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true, port: PORT });
+  if (req.method === 'GET' && url.pathname === '/api/version') {
+    let version = '0.0.0';
+    try { version = require('./package.json').version || version; } catch {}
+    return sendJson(res, 200, { version });
+  }
   if (req.method === 'GET') return serveStatic(req, res, url.pathname);
   return sendJson(res, 405, { error: 'Method not allowed' });
 });
