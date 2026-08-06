@@ -353,11 +353,43 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     });
   }
 
+  /* pick a FEMALE browser voice for the fallback path — never the male OS
+     default (e.g. "Microsoft David"), which is why she sometimes sounded
+     like a man when edge-tts was unavailable. Prefers the chosen neural
+     voice by name, then any en-US female, then any voice that isn't male. */
+  const MALE_VOICES = /(david|mark|guy|daniel|george|james|christopher|brian|eric|thomas|ryan|alex\b)/i;
+  const FEMALE_HINTS = /(michelle|jenny|aria|ana|sonia|zira|hazel|cora|susan|libby|heather|linda|moira|samantha|karen|joanna|salli|kendra|kimberly|victoria|allison|ava|emma|fiona|nicky|olivia|serena|tessa|nora)/i;
+  function pickFemaleVoice(prefName) {
+    const want = String(prefName || '').toLowerCase();
+    let voices = [];
+    try { voices = window.speechSynthesis.getVoices(); } catch {}
+    if (!voices.length) return null;
+    const firstWord = want.split('-')[1] || '';
+    /* 1) exact name match, e.g. en-US-MichelleNeural → Microsoft Michelle */
+    if (firstWord) {
+      const hit = voices.find((v) => v.name.toLowerCase().includes(firstWord.toLowerCase()));
+      if (hit) return hit;
+    }
+    /* 2) any clearly-female name hint (English) */
+    const female = voices.find((v) => FEMALE_HINTS.test(v.name));
+    if (female) return female;
+    /* 3) en-US voice that is not known-male */
+    const enUS = voices.find((v) => /^en[-_]US/i.test(v.lang) && !MALE_VOICES.test(v.name));
+    if (enUS) return enUS;
+    /* 4) last resort: any non-male-named voice */
+    return voices.find((v) => !MALE_VOICES.test(v.name)) || voices[0] || null;
+  }
+  let fallbackVoice = pickFemaleVoice(prefs.voice);
+  try {
+    window.speechSynthesis.onvoiceschanged = () => { fallbackVoice = pickFemaleVoice(prefs.voice); };
+  } catch {}
+
   function browserFallback(text) {
     try {
       return new Promise((resolve) => {
         const u = new SpeechSynthesisUtterance(text.slice(0, 300));
-        u.rate = 0.94; u.pitch = 1.06;
+        u.rate = 0.94; u.pitch = 1.12; /* slight lift keeps her sounding female */
+        if (fallbackVoice) u.voice = fallbackVoice;
         u.onstart = () => { if (engine) engine.setTalking(true); };
         u.onboundary = () => { if (engine) engine.speechImpulse(1); };
         u.onend = () => { if (engine) engine.setTalking(false); resolve(); };

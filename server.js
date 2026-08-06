@@ -386,9 +386,14 @@ function findPython() {
   if (IS_ELECTRON) {
     try {
       const { app } = require('electron');
+      /* packaged layout: <app>/resources/app.asar AND <app>/resources/venv —
+         the venv is a SIBLING of app.asar inside resources/, so climb exactly
+         ONE level from app.getAppPath(). (path.resolve normalizes so we can
+         join robustly even when getAppPath is a .asar path.) */
       const base = app.getAppPath(); // packaged: ...\\resources\\app.asar
-      cands.push(path.join(base, '..', '..', 'venv', 'Scripts', 'python.exe'));
-      cands.push(path.join(base, '..', '..', 'venv', 'bin', 'python3'));
+      const resDir = path.resolve(base, '..'); // ...\\resources
+      cands.push(path.join(resDir, 'venv', 'Scripts', 'python.exe'));
+      cands.push(path.join(resDir, 'venv', 'bin', 'python3'));
     } catch { /* ignore */ }
   }
   for (const p of cands) { try { if (fs.existsSync(p)) return p; } catch {} }
@@ -397,6 +402,11 @@ function findPython() {
     : path.join(__dirname, 'venv', 'bin', 'python3');
 }
 const PY = findPython();
+/* If the venv can't be found (fresh clone, EXE missing bundled resources),
+   log once at boot so voice problems are diagnosable. */
+if (!fs.existsSync(PY)) {
+  console.log('  ⚠ TTS engine (python venv) not found at ' + PY);
+}
 
 const TTS_VOICES = {
   'en-US-JennyNeural': 'Warm & gentle (default)',
@@ -415,21 +425,41 @@ async function handleTTS(req, res) {
   const voice = TTS_VOICES[body.voice] ? body.voice : 'en-US-MichelleNeural';
   if (!text.trim()) return sendJson(res, 400, { error: 'No text to speak' });
 
+  /* Pre-check the engine so we never send a 200 that turns out empty. */
+  if (!fs.existsSync(PY)) {
+    return sendJson(res, 501, { error: 'TTS engine not set up. Run: ' + TTS_SETUP_HINT });
+  }
+
   const child = spawn(PY, [
     '-m', 'edge_tts', '--voice', voice,
     '--rate=-6%', '--pitch=+5Hz',
     '--text', text, '--write-media', '-',
   ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
+  let gotBytes = false;
+  let headersSent = false;
+  const fail = () => {
+    /* engine dead → never leave the client with a silent 200; destroying
+       the socket makes the client fall back to a browser voice. */
+    try { res.destroy(); } catch {}
+  };
+
   child.on('error', () => {
-    if (!res.headersSent) sendJson(res, 501, { error: 'TTS engine not set up. Run: ' + TTS_SETUP_HINT });
+    if (!headersSent) return sendJson(res, 501, { error: 'TTS engine not set up. Run: ' + TTS_SETUP_HINT });
+    fail();
   });
 
   res.writeHead(200, { 'Content-Type': 'audio/mpeg' });
+  headersSent = true;
+  child.stdout.on('data', () => { gotBytes = true; });
   child.stdout.pipe(res);
   child.stderr.on('data', () => {});
   const timer = setTimeout(() => { try { child.kill(); } catch {} }, 30000);
-  child.on('close', () => { clearTimeout(timer); try { res.end(); } catch {} });
+  child.on('close', (code) => {
+    clearTimeout(timer);
+    if (!gotBytes) { fail(); return; } /* zero output → not real audio */
+    try { res.end(); } catch {}
+  });
 }
 
 /* ---------------- second brain (long-term memory) ----------------
