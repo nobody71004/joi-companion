@@ -57,7 +57,10 @@ function createWindow() {
     },
   });
 
-  win.loadURL('http://127.0.0.1:4173/');
+  /* localhost (not 127.0.0.1) so YouTube's embedded player trusts the
+     page origin — embeds from a bare IP address show "Video unavailable".
+     localhost resolves to the same 127.0.0.1 server. */
+  win.loadURL('http://localhost:4173/');
 
   /* open external links in the default browser, not inside her */
   win.webContents.setWindowOpenHandler(({ url }) => {

@@ -57,6 +57,7 @@
         <button class="btn small" id="btn-quote" title="She says a Blade Runner line">❝ Quote</button>
         <button class="btn small" id="btn-pause" title="Pause / resume her reply">⏸ Pause</button>
         <button class="btn small" id="btn-stop" title="Stop her reply completely (cancels the model)">■ Stop</button>
+        <button class="btn small" id="btn-voice" title="Toggle her speaking voice">🔊 Voice</button>
       </div>
       <div class="voice-quick">
         <label class="quick-label" for="quick-voice">Voice</label>
@@ -70,7 +71,18 @@
 
     <!-- right: chat -->
     <section class="chat-col">
+      <div class="chat-tabs" id="chat-tabs">
+        <button type="button" class="tab active" id="tab-chat">💬 Chat</button>
+        <button type="button" class="tab" id="tab-media">▶ Media <span class="tab-badge" id="media-count">0</span></button>
+      </div>
       <div class="chat-log" id="chat-log" aria-live="polite"></div>
+      <div class="media-panel" id="media-panel" style="display:none">
+        <div class="mp-player" id="mp-player">
+          <div class="mp-empty" id="mp-empty">Send JOI a YouTube link and she'll play it here — music or video, on loop while you chat.</div>
+        </div>
+        <div class="mp-queue-head">Queue · <span id="mp-count">0</span> tracks</div>
+        <div class="mp-queue" id="mp-queue"></div>
+      </div>
       <div class="now-playing" id="now-playing" style="display:none">
         <span class="np-dot"></span>
         <span class="np-label" id="np-label">Now playing</span>

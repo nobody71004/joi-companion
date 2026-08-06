@@ -223,12 +223,12 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     return el;
   }
 
-  /* ---------------- YouTube media links ----------------
-     When a message (yours or hers) contains a YouTube link, JOI unfurls it
-     into a media card — thumbnail + title via the server's oEmbed proxy, and
-     a big ▶ button that swaps in the embedded player. In the desktop EXE she
-     auto-plays the first link instantly (the autoplay restriction is disabled
-     there); in a browser you tap ▶ once (browsers need a user gesture). */
+  /* ---------------- YouTube media player (Media tab) ----------------
+     Every YouTube link JOI receives goes to the MEDIA TAB: a big player up
+     top plus a queue of everything you've sent her. Sending a link switches
+     to the Media tab and starts playing right away; the player stays mounted
+     (hidden) while you chat, so the audio keeps playing in the background.
+     Tapping any chip or queue item brings it back to the front. */
   const YT_RE = /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/|music\.youtube\.com\/watch\?(?:.*&)?v=)([A-Za-z0-9_-]{11})/g;
   function extractYtIds(text) {
     const ids = [];
@@ -238,101 +238,121 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     return [...new Set(ids)];
   }
 
-  function mediaCardHtml(id, meta) {
-    const title = (meta && meta.title) || 'YouTube video';
-    const author = (meta && meta.author) || 'YouTube';
-    const thumb = (meta && meta.thumb) || `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
-    return `<div class="media-card" data-vid="${mdEscape(id)}">
-      <div class="media-thumb" style="background-image:url('${thumb}')">
-        <button type="button" class="media-play" title="Play">▶</button>
-      </div>
-      <div class="media-meta">
-        <span class="media-title">${mdEscape(title)}</span>
-        <span class="media-author">${mdEscape(author)}</span>
-      </div>
-      <button type="button" class="media-close" title="Dismiss">✕</button>
-    </div>`;
-  }
-
-  function ytPlayerHtml(id) {
-    return `<div class="media-player"><iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0&playsinline=1&modestbranding=1" title="YouTube video player" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe></div>`;
-  }
-
+  const mediaQueue = []; // { id, title, author, thumb }
+  let currentVid = null;
+  const chatTabs = { chat: $('#tab-chat'), media: $('#tab-media') };
+  const mediaPanel = $('#media-panel');
+  const mpPlayer = $('#mp-player');
+  const mpQueue = $('#mp-queue');
+  const mpCountEl = $('#mp-count');
+  const mediaCountEl = $('#media-count');
   const nowPlayingEl = $('#now-playing');
   const npLabelEl = $('#np-label');
-  let currentVid = null;
-  function showNowPlaying(id, title) {
+
+  function setTab(which) {
+    chatTabs.chat.classList.toggle('active', which === 'chat');
+    chatTabs.media.classList.toggle('active', which === 'media');
+    const showMedia = which === 'media';
+    log.style.display = showMedia ? 'none' : '';
+    mediaPanel.style.display = showMedia ? '' : 'none';
+  }
+  chatTabs.chat.addEventListener('click', () => setTab('chat'));
+  chatTabs.media.addEventListener('click', () => setTab('media'));
+
+  function ytPlayerHtml(id) {
+    /* youtube-nocookie.com + a missing `origin` param makes YouTube show
+       "Video unavailable" on embeds loaded from IP addresses (127.0.0.1).
+       Use the standard embed with an explicit origin so the player always
+       trusts the page, plus a fallback link that opens the video in the
+       browser if an embed is ever refused. */
+    const origin = encodeURIComponent(location.origin);
+    return `<div class="mp-embed">` +
+      `<iframe src="https://www.youtube.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0&playsinline=1&modestbranding=1&origin=${origin}" title="YouTube video player" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>` +
+      `<div class="mp-embed-bar"><span>♪ keeps playing while you chat</span>` +
+      `<a href="https://www.youtube.com/watch?v=${encodeURIComponent(id)}" target="_blank" rel="noopener">Open on YouTube ↗</a></div>` +
+      `</div>`;
+  }
+
+  function renderQueue() {
+    if (!mpQueue) return;
+    mpQueue.innerHTML = '';
+    for (const v of mediaQueue) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'mp-item' + (v.id === currentVid ? ' playing' : '');
+      item.innerHTML =
+        `<span class="mp-thumb" style="background-image:url('${v.thumb}')"></span>` +
+        `<span class="mp-meta"><span class="mp-title">${mdEscape(v.title)}</span><span class="mp-author">${mdEscape(v.author)}</span></span>` +
+        `<span class="mp-state">${v.id === currentVid ? '● playing' : '▶'}</span>`;
+      item.addEventListener('click', () => playInMedia(v.id));
+      mpQueue.appendChild(item);
+    }
+    const n = mediaQueue.length;
+    if (mpCountEl) mpCountEl.textContent = n;
+    if (mediaCountEl) mediaCountEl.textContent = n;
+  }
+
+  async function unfurl(id) {
+    try {
+      const r = await fetch(`/api/yt-meta?v=${encodeURIComponent(id)}`);
+      const j = await r.json();
+      if (j && !j.error) return j;
+    } catch { /* offline → generic card */ }
+    return { id, title: 'YouTube video', author: 'YouTube', thumb: `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg` };
+  }
+
+  async function queueMedia(id) {
+    const existing = mediaQueue.find((v) => v.id === id);
+    if (existing) return existing;
+    const meta = await unfurl(id);
+    const entry = { id, title: meta.title || 'YouTube video', author: meta.author || 'YouTube', thumb: meta.thumb };
+    mediaQueue.push(entry);
+    renderQueue();
+    return entry;
+  }
+
+  function playInMedia(id) {
+    const v = mediaQueue.find((x) => x.id === id);
+    if (!v) return;
     currentVid = id;
-    npLabelEl.textContent = title ? `Now playing — ${title}` : 'Now playing on YouTube';
+    if (mpPlayer) mpPlayer.innerHTML = ytPlayerHtml(id);
+    if (npLabelEl) npLabelEl.textContent = `Now playing — ${v.title}`;
     if (nowPlayingEl) nowPlayingEl.style.display = '';
+    renderQueue();
+    setTab('media');
   }
-  function stopNowPlaying() {
+
+  function stopMedia() {
     currentVid = null;
+    if (mpPlayer) mpPlayer.innerHTML = '<div class="mp-empty">Send JOI a YouTube link and she\'ll play it here — music or video, on loop while you chat.</div>';
     if (nowPlayingEl) nowPlayingEl.style.display = 'none';
-    /* unload every embed and restore its thumbnail card */
-    $$('.media-host').forEach((h) => {
-      if (h.dataset.card) { h.innerHTML = h.dataset.card; delete h.dataset.card; }
-    });
+    renderQueue();
   }
-  if (nowPlayingEl && $('#np-close')) {
-    $('#np-close').addEventListener('click', stopNowPlaying);
-  }
+  if (nowPlayingEl && $('#np-close')) $('#np-close').addEventListener('click', stopMedia);
 
-  function playYtHost(host) {
-    const card = host.querySelector('.media-card');
-    if (!card) return;
-    const vid = card.dataset.vid;
-    if (!vid || host.querySelector('iframe')) return;
-    host.dataset.card = host.innerHTML; // remember the card so Stop can restore it
-    host.innerHTML = ytPlayerHtml(vid);
-    showNowPlaying(vid);
-  }
-
-  /* one delegated handler for every card's play + dismiss buttons */
-  document.addEventListener('click', (ev) => {
-    const play = ev.target.closest('.media-play');
-    if (play) {
-      const host = play.closest('.media-host');
-      if (host) playYtHost(host);
-      return;
-    }
-    const close = ev.target.closest('.media-close');
-    if (close) {
-      const host = close.closest('.media-host');
-      if (host) host.remove();
-      if (!document.querySelector('.media-host')) stopNowPlaying();
-    }
-  });
-
-  /* attach media cards to a bubble for each YouTube id found in its text */
-  async function attachMedia(bubble, ids) {
+  /* attach a compact chip to a bubble for each YouTube id found; with
+     focus:true (user-sent links) she also opens the Media tab + plays */
+  async function attachMedia(bubble, ids, { focus = true } = {}) {
     for (const id of ids) {
-      const host = document.createElement('div');
-      host.className = 'media-host';
-      host.innerHTML = mediaCardHtml(id, null);
-      bubble.appendChild(host);
-      log.scrollTop = log.scrollHeight;
-      /* unfurl the real title/author from the server (thumbnail-only card until then) */
-      fetch(`/api/yt-meta?v=${encodeURIComponent(id)}`)
-        .then((r) => r.json())
-        .then((meta) => {
-          if (!meta || meta.error || !host.isConnected) return;
-          host.innerHTML = mediaCardHtml(id, meta);
-          if (currentVid === id) showNowPlaying(id, meta.title);
-        })
-        .catch(() => {});
+      const v = await queueMedia(id);
+      if (!bubble) continue;
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'media-chip';
+      chip.innerHTML =
+        `<span class="media-chip-thumb" style="background-image:url('${v.thumb}')"></span>` +
+        `<span class="media-chip-meta"><span class="media-chip-title">${mdEscape(v.title)}</span>` +
+        `<span class="media-chip-sub">▶ in Media tab</span></span>`;
+      chip.addEventListener('click', () => playInMedia(v.id));
+      bubble.appendChild(chip);
     }
-    /* desktop EXE: autoplay the first link — the EXE disables the browser
-       autoplay restriction, so she starts playing it right away */
-    if (window.joiDesktop && ids.length) {
-      setTimeout(() => {
-        const first = bubble.querySelector('.media-host');
-        if (first) {
-          playYtHost(first);
-          addMsg('joi', `<span class="em">media</span>${mdEscape('Playing that for you.')}`, 'now playing');
-          setExpr('playful');
-        }
-      }, 500);
+    if (focus && ids.length) {
+      const first = mediaQueue.find((x) => x.id === ids[0]);
+      if (first) {
+        playInMedia(first.id);
+        addMsg('joi', `<span class="em">media</span>${mdEscape(`Playing "${first.title}" in the Media tab — it keeps playing while we talk.`) }`, 'now playing');
+        setExpr('playful');
+      }
     }
   }
 
@@ -716,7 +736,7 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
         currentBubble.innerHTML = mdRender(acc);
         /* if her reply itself contains a YouTube link, unfurl it too */
         const replyYt = extractYtIds(acc);
-        if (replyYt.length) attachMedia(currentBubble, replyYt);
+        if (replyYt.length) attachMedia(currentBubble, replyYt, { focus: false });
       }
       currentAbort = null;
       history.push({ role: 'assistant', text: acc });
@@ -985,8 +1005,32 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   autoSpeakInput.checked = prefs.autoSpeak;
   autoSpeakInput.addEventListener('change', () => {
     prefs.autoSpeak = autoSpeakInput.checked; savePrefs();
+    if (!prefs.autoSpeak) stopSpeaking();
     if (window.joiDesktop) window.joiDesktop.setMuted(!prefs.autoSpeak); // sync tray label
+    syncVoiceBtn();
   });
+
+  /* quick voice mute button (stage tools) — same switch as the Settings
+     toggle and the EXE tray mute; all three stay in sync */
+  const voiceBtn = $('#btn-voice');
+  function syncVoiceBtn() {
+    if (!voiceBtn) return;
+    const on = !!prefs.autoSpeak;
+    voiceBtn.textContent = on ? '🔊 Voice' : '🔇 Muted';
+    voiceBtn.classList.toggle('muted', !on);
+    voiceBtn.title = on ? 'Mute her voice' : 'Unmute her voice';
+  }
+  if (voiceBtn) {
+    voiceBtn.addEventListener('click', () => {
+      prefs.autoSpeak = !prefs.autoSpeak;
+      savePrefs();
+      if (!prefs.autoSpeak) stopSpeaking();
+      if (window.joiDesktop) window.joiDesktop.setMuted(!prefs.autoSpeak);
+      autoSpeakInput.checked = prefs.autoSpeak;
+      syncVoiceBtn();
+    });
+    syncVoiceBtn();
+  }
 
   /* CPU mode toggle (Ollama) — num_gpu:0 on every request, crash-proof */
   const cpuToggle = $('#set-cpu');
@@ -1007,6 +1051,7 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
       savePrefs();
       autoSpeakInput.checked = prefs.autoSpeak;
       if (muted) stopSpeaking();
+      syncVoiceBtn();
     });
     const autoStart = $('#set-autostart');
     if (autoStart) {
