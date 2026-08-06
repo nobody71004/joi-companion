@@ -409,11 +409,18 @@ if (!fs.existsSync(PY)) {
 }
 
 const TTS_VOICES = {
-  'en-US-JennyNeural': 'Warm & gentle (default)',
+  'en-US-MichelleNeural': 'Friendly (default)',
+  'en-US-JennyNeural': 'Warm & gentle',
   'en-US-AriaNeural': 'Confident',
   'en-US-AnaNeural': 'Soft & intimate',
-  'en-US-MichelleNeural': 'Friendly',
+  'en-US-AvaNeural': 'Caring & expressive',
+  'en-US-EmmaNeural': 'Cheerful & clear',
+  'en-GB-LibbyNeural': 'British & sweet',
   'en-GB-SoniaNeural': 'British & warm',
+  'en-GB-MaisieNeural': 'British & bright',
+  'en-AU-NatashaNeural': 'Australian',
+  'en-CA-ClaraNeural': 'Canadian',
+  'en-IE-EmilyNeural': 'Irish',
 };
 
 const TTS_SETUP_HINT = 'cd joi-companion && python -m venv venv && venv/Scripts/python.exe -m pip install edge-tts';

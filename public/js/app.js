@@ -29,11 +29,18 @@
     custom:    { label: 'Custom (OpenAI-compatible)', base: '', key: false },
   };
   const VOICES = {
+    'en-US-MichelleNeural': 'Michelle — friendly (default)',
     'en-US-JennyNeural': 'Jenny — warm & gentle',
     'en-US-AriaNeural': 'Aria — confident',
     'en-US-AnaNeural': 'Ana — soft & intimate',
-    'en-US-MichelleNeural': 'Michelle — friendly',
+    'en-US-AvaNeural': 'Ava — caring & expressive',
+    'en-US-EmmaNeural': 'Emma — cheerful & clear',
+    'en-GB-LibbyNeural': 'Libby — British & sweet',
     'en-GB-SoniaNeural': 'Sonia — British & warm',
+    'en-GB-MaisieNeural': 'Maisie — British & bright',
+    'en-AU-NatashaNeural': 'Natasha — Australian',
+    'en-CA-ClaraNeural': 'Clara — Canadian',
+    'en-IE-EmilyNeural': 'Emily — Irish',
   };
 
   /* ---------------- system persona ---------------- */
@@ -358,7 +365,7 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
      like a man when edge-tts was unavailable. Prefers the chosen neural
      voice by name, then any en-US female, then any voice that isn't male. */
   const MALE_VOICES = /(david|mark|guy|daniel|george|james|christopher|brian|eric|thomas|ryan|alex\b)/i;
-  const FEMALE_HINTS = /(michelle|jenny|aria|ana|sonia|zira|hazel|cora|susan|libby|heather|linda|moira|samantha|karen|joanna|salli|kendra|kimberly|victoria|allison|ava|emma|fiona|nicky|olivia|serena|tessa|nora)/i;
+  const FEMALE_HINTS = /(michelle|jenny|aria|ana|sonia|ava|emma|libby|maisie|natasha|clara|emily|zira|hazel|cora|susan|heather|linda|moira|samantha|karen|joanna|salli|kendra|kimberly|victoria|allison|fiona|nicky|olivia|serena|tessa|nora)/i;
   function pickFemaleVoice(prefName) {
     const want = String(prefName || '').toLowerCase();
     let voices = [];
