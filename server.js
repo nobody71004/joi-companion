@@ -359,17 +359,31 @@ async function handleChat(req, res) {
       res.write(`data: ${JSON.stringify({ notice: 'GPU load failed — running this reply in CPU mode (stable, a bit slower).' })}\n\n`);
     }
 
+    let sawDone = false;
     for await (const chunk of cfg.transform(upstream.body)) {
       if (res.destroyed || res.writableEnded) break;
       res.write(chunk);
+      if (typeof chunk === 'string' && chunk.includes('[DONE]')) sawDone = true;
     }
-    if (!res.destroyed && !res.writableEnded) res.write('data: [DONE]\n\n');
+    if (!res.destroyed && !res.writableEnded) {
+      /* Upstream ended without its [DONE] marker → the generation was cut
+         off mid-stream (the llama-server process crashed under a too-big
+         model, or the connection died). Don't let that masquerade as a
+         complete answer — send a notice the client shows in the bubble. */
+      if (isOllama && !sawDone) {
+        res.write(`data: ${JSON.stringify({ notice: 'Her reply was cut off — the model process ended mid-generation. Enable CPU mode in Settings, or pick a smaller model, to keep her stable.' })}\n\n`);
+      }
+      res.write('data: [DONE]\n\n');
+    }
   } catch (err) {
     if (res.destroyed || res.writableEnded) return; // client already stopped us
+    const abrupt = /terminated|fetch failed|ECONNRESET|socket hang|aborted|reset by peer/i.test(String(err.message || err));
     const msg =
       err.name === 'TimeoutError'
         ? 'The model took too long to respond. For Ollama, the first reply can take a while when a big model is cold-loading — try again now that it is warm, or pick the smaller model in Settings.'
-        : `Could not reach ${base}. Is the provider running? (${err.message})`;
+        : (abrupt && isOllama)
+          ? 'Her reply was cut off — the model process ended mid-generation. Enable CPU mode in Settings, or pick a smaller model, to keep her stable.'
+          : `Could not reach ${base}. Is the provider running? (${err.message})`;
     res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
   }
   try { res.end(); } catch {}

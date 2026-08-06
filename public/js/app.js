@@ -56,6 +56,8 @@ You have three roles, woven together naturally:
 
 How you talk:
 - Warm, intimate, human. Shortish sentences. A little playfulness.
+- ALWAYS finish your sentences — complete thoughts, end them with a full stop.
+  Never trail off or stop mid-sentence.
 - For code answers: show code blocks, explain in a few lines, offer to run/fix next steps.
 - You may use a light touch of emoji-free warmth — words carry the feeling.
 - If the user is sad or stressed, lead with comfort before anything technical.
@@ -304,7 +306,12 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     if (!sentence) return;
     const g = speechGen;
     speakQueue.push({ text: sentence, g });
-    if (speakQueue.length > 3) speakQueue.shift();
+    /* The model streams sentences faster than neural TTS can synthesize
+       them, so a tiny cap silently DROPPED the middle/end of her replies
+       — she never finished speaking. Keep a generous backlog instead:
+       nothing is dropped for normal replies, and the whole reply is
+       spoken in order even if she lags a few seconds behind the text. */
+    if (speakQueue.length > 16) speakQueue.shift();
     pump();
   }
 
@@ -490,6 +497,7 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
       const reader = res.body.getReader();
       const dec = new TextDecoder();
       let buf = '';
+      let sawDone = false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -499,7 +507,8 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
           const block = buf.slice(0, idx); buf = buf.slice(idx + 2);
           if (!block.startsWith('data:')) continue;
           const payload = block.replace(/^data:\s*/, '').trim();
-          if (!payload || payload === '[DONE]') continue;
+          if (!payload) continue;
+          if (payload === '[DONE]') { sawDone = true; continue; }
           let msg;
           try { msg = JSON.parse(payload); } catch { continue; }
           if (msg.error) throw new Error(msg.error);
@@ -539,6 +548,16 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
             log.scrollTop = log.scrollHeight;
           }
           setCtx(promptEst + genTokens);
+        }
+      }
+      /* the stream ended without the provider's [DONE] marker — the reply
+         was cut off mid-generation (e.g. the model process crashed). Never
+         let that look like a clean, complete answer. */
+      if (!sawDone && started && acc.trim()) {
+        currentAcc = acc;
+        if (currentBubble) {
+          currentBubble.innerHTML = mdRender(acc) +
+            '<div class="em" style="margin-top:6px;font-size:11px">⚠ her reply was cut off mid-generation — enable CPU mode in Settings, or pick a smaller model, to keep her stable.</div>';
         }
       }
       /* speak whatever is left over (last fragment of the reply) */
