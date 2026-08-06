@@ -219,6 +219,45 @@ async function handleYtMeta(res, videoId) {
   return sendJson(res, 200, meta);
 }
 
+/* ---------------- /api/latest-release (in-app update banner) ----------------
+   Proxies the GitHub Releases API so the app can show "Update available —
+   vX.Y.Z" on boot without CORS or API-key hassles (works in the browser AND
+   inside the packaged EXE). Cached for 10 minutes so a boot storm never
+   hammers GitHub. */
+const GH_REPO = 'nobody71004/joi-companion';
+let releaseCache = { at: 0, data: null };
+
+async function handleLatestRelease(res) {
+  if (releaseCache.data && Date.now() - releaseCache.at < 10 * 60 * 1000) {
+    return sendJson(res, 200, releaseCache.data);
+  }
+  try {
+    const r = await fetch(`https://api.github.com/repos/${GH_REPO}/releases/latest`, {
+      signal: AbortSignal.timeout(8000),
+      headers: {
+        'User-Agent': 'JOI-Holographic-Companion',
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    });
+    if (!r.ok) return sendJson(res, 502, { error: 'GitHub unreachable (' + r.status + ')' });
+    const j = await r.json();
+    const data = {
+      tag: String(j.tag_name || ''),
+      name: String(j.name || ''),
+      url: String(j.html_url || `https://github.com/${GH_REPO}/releases/latest`),
+      published_at: String(j.published_at || ''),
+      assets: (j.assets || [])
+        .filter((a) => /(exe|zip|msi|dmg|appimage|tar|gz)/i.test(String(a.name || '')))
+        .map((a) => ({ name: String(a.name || ''), url: String(a.browser_download_url || ''), size: Number(a.size) || 0 })),
+    };
+    releaseCache = { at: Date.now(), data };
+    return sendJson(res, 200, data);
+  } catch {
+    return sendJson(res, 502, { error: 'GitHub unreachable' });
+  }
+}
+
 /* ---------------- /api/chat ---------------- */
 
 function toOpenAIStream(headers) {
@@ -672,6 +711,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url.pathname === '/api/memory/clear') return handleMemoryClear(res);
   if (req.method === 'GET' && url.pathname === '/api/audio-clips') return handleAudioClips(res);
   if (req.method === 'GET' && url.pathname === '/api/yt-meta') return handleYtMeta(res, url.searchParams.get('v'));
+  if (req.method === 'GET' && url.pathname === '/api/latest-release') return handleLatestRelease(res);
   if (req.method === 'POST' && url.pathname === '/api/tts') return handleTTS(req, res);
   if (req.method === 'POST' && url.pathname === '/api/server/stop') return handleServerStop(res);
   if (req.method === 'POST' && url.pathname === '/api/server/restart') return handleServerRestart(res);

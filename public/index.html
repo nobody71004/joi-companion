@@ -37,6 +37,14 @@
     <button type="button" class="btn gear-btn" id="btn-settings" title="Settings">⚙</button>
   </header>
 
+  <!-- in-app update banner: shown on boot when a newer GitHub Release exists -->
+  <div class="update-banner" id="update-banner" style="display:none">
+    <span class="ub-pulse"></span>
+    <span class="ub-text" id="ub-text">Update available</span>
+    <a class="btn small ub-btn" id="ub-link" href="https://github.com/nobody71004/joi-companion/releases/latest" target="_blank" rel="noopener" title="Opens the GitHub Releases page — grab the new JOI-Companion.exe there">⬇ Download vX</a>
+    <button type="button" class="ub-close" id="ub-close" title="Dismiss this update (you'll be reminded on the next release)">✕</button>
+  </div>
+
   <main class="chat-main">
     <!-- left: the living portrait -->
     <section class="chat-stage-col">

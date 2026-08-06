@@ -1133,6 +1133,51 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     } catch { showOffline('Restart did not complete. Launch Start-JOI.bat.'); }
   });
 
+  /* ---------------- in-app update banner ----------------
+     On boot the app asks GitHub (via the server proxy /api/latest-release,
+     so there are no CORS or API-key issues) for the newest release. If it
+     is newer than the running build, a banner appears at the top: "Update
+     available — vX.Y.Z" with a download button. Dismissing remembers the
+     tag, so she only nags once per new version. */
+  function cmpVer(a, b) {
+    const pa = String(a || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+    const pb = String(b || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
+    for (let i = 0; i < 3; i++) {
+      const x = pa[i] || 0, y = pb[i] || 0;
+      if (x !== y) return x - y;
+    }
+    return 0;
+  }
+
+  const updateBanner = $('#update-banner');
+  async function checkForUpdates(currentVersion) {
+    if (!updateBanner) return;
+    try {
+      const lr = await fetch('/api/latest-release');
+      const lj = await lr.json();
+      if (!lj || !lj.tag || !currentVersion) return;
+      const latest = String(lj.tag).replace(/^v/i, '');
+      if (cmpVer(currentVersion, latest) >= 0) return; // already up to date
+      try {
+        if (localStorage.getItem('joi.dismissedUpdate') === latest) return; // already dismissed this version
+      } catch {}
+      $('#ub-text').textContent = `Update available — v${latest}`;
+      const link = $('#ub-link');
+      link.textContent = '⬇ Download v' + latest;
+      link.href = lj.url || 'https://github.com/nobody71004/joi-companion/releases/latest';
+      updateBanner.style.display = 'flex';
+    } catch { /* offline or GitHub down → no banner */ }
+  }
+  if (updateBanner) {
+    $('#ub-close').addEventListener('click', () => {
+      updateBanner.style.display = 'none';
+      try {
+        const m = $('#ub-text').textContent.match(/v([\d.]+)/);
+        if (m && m[1]) localStorage.setItem('joi.dismissedUpdate', m[1]);
+      } catch {}
+    });
+  }
+
   /* ---------------- boot ---------------- */
   (async function boot() {
     const up = await pingServer();
@@ -1140,15 +1185,20 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     serverUp = true;
     initEngine();
     ctxLimitEl.textContent = fmtTok(ctxLimit);
-    /* updates: show the running build version next to the download button */
+    /* updates: show the running build version next to the download button,
+       and compare against the newest GitHub release for the banner */
+    let currentVersion = null;
     try {
       const vr = await fetch('/api/version');
       const vj = await vr.json();
       if (vj && vj.version) {
+        currentVersion = vj.version;
         const el = $('#upd-version');
         if (el) el.textContent = `You're on v${vj.version} — the latest build is always on the Releases page.`;
       }
     } catch {}
+    /* fire-and-forget: never let a slow GitHub check delay her boot greeting */
+    checkForUpdates(currentVersion);
     /* second brain: pull server memory (survives browser resets) */
     await JOIMemory.pullServer();
     refreshMemUI();
