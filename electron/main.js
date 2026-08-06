@@ -16,6 +16,11 @@ const { app, BrowserWindow, shell, Tray, Menu, nativeImage, ipcMain } = require(
 const path = require('path');
 const net = require('net');
 
+/* YouTube embeds must be able to start with sound the moment a link is
+   sent — inside the EXE there is no browser autoplay restriction to respect,
+   so JOI plays the video immediately instead of making the user click. */
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
 let win = null;
 let tray = null;
 let joiServer = null;

@@ -223,6 +223,119 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     return el;
   }
 
+  /* ---------------- YouTube media links ----------------
+     When a message (yours or hers) contains a YouTube link, JOI unfurls it
+     into a media card — thumbnail + title via the server's oEmbed proxy, and
+     a big ▶ button that swaps in the embedded player. In the desktop EXE she
+     auto-plays the first link instantly (the autoplay restriction is disabled
+     there); in a browser you tap ▶ once (browsers need a user gesture). */
+  const YT_RE = /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/|music\.youtube\.com\/watch\?(?:.*&)?v=)([A-Za-z0-9_-]{11})/g;
+  function extractYtIds(text) {
+    const ids = [];
+    YT_RE.lastIndex = 0;
+    let m;
+    while ((m = YT_RE.exec(String(text || '')))) ids.push(m[1]);
+    return [...new Set(ids)];
+  }
+
+  function mediaCardHtml(id, meta) {
+    const title = (meta && meta.title) || 'YouTube video';
+    const author = (meta && meta.author) || 'YouTube';
+    const thumb = (meta && meta.thumb) || `https://i.ytimg.com/vi/${encodeURIComponent(id)}/hqdefault.jpg`;
+    return `<div class="media-card" data-vid="${mdEscape(id)}">
+      <div class="media-thumb" style="background-image:url('${thumb}')">
+        <button type="button" class="media-play" title="Play">▶</button>
+      </div>
+      <div class="media-meta">
+        <span class="media-title">${mdEscape(title)}</span>
+        <span class="media-author">${mdEscape(author)}</span>
+      </div>
+      <button type="button" class="media-close" title="Dismiss">✕</button>
+    </div>`;
+  }
+
+  function ytPlayerHtml(id) {
+    return `<div class="media-player"><iframe src="https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0&playsinline=1&modestbranding=1" title="YouTube video player" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe></div>`;
+  }
+
+  const nowPlayingEl = $('#now-playing');
+  const npLabelEl = $('#np-label');
+  let currentVid = null;
+  function showNowPlaying(id, title) {
+    currentVid = id;
+    npLabelEl.textContent = title ? `Now playing — ${title}` : 'Now playing on YouTube';
+    if (nowPlayingEl) nowPlayingEl.style.display = '';
+  }
+  function stopNowPlaying() {
+    currentVid = null;
+    if (nowPlayingEl) nowPlayingEl.style.display = 'none';
+    /* unload every embed and restore its thumbnail card */
+    $$('.media-host').forEach((h) => {
+      if (h.dataset.card) { h.innerHTML = h.dataset.card; delete h.dataset.card; }
+    });
+  }
+  if (nowPlayingEl && $('#np-close')) {
+    $('#np-close').addEventListener('click', stopNowPlaying);
+  }
+
+  function playYtHost(host) {
+    const card = host.querySelector('.media-card');
+    if (!card) return;
+    const vid = card.dataset.vid;
+    if (!vid || host.querySelector('iframe')) return;
+    host.dataset.card = host.innerHTML; // remember the card so Stop can restore it
+    host.innerHTML = ytPlayerHtml(vid);
+    showNowPlaying(vid);
+  }
+
+  /* one delegated handler for every card's play + dismiss buttons */
+  document.addEventListener('click', (ev) => {
+    const play = ev.target.closest('.media-play');
+    if (play) {
+      const host = play.closest('.media-host');
+      if (host) playYtHost(host);
+      return;
+    }
+    const close = ev.target.closest('.media-close');
+    if (close) {
+      const host = close.closest('.media-host');
+      if (host) host.remove();
+      if (!document.querySelector('.media-host')) stopNowPlaying();
+    }
+  });
+
+  /* attach media cards to a bubble for each YouTube id found in its text */
+  async function attachMedia(bubble, ids) {
+    for (const id of ids) {
+      const host = document.createElement('div');
+      host.className = 'media-host';
+      host.innerHTML = mediaCardHtml(id, null);
+      bubble.appendChild(host);
+      log.scrollTop = log.scrollHeight;
+      /* unfurl the real title/author from the server (thumbnail-only card until then) */
+      fetch(`/api/yt-meta?v=${encodeURIComponent(id)}`)
+        .then((r) => r.json())
+        .then((meta) => {
+          if (!meta || meta.error || !host.isConnected) return;
+          host.innerHTML = mediaCardHtml(id, meta);
+          if (currentVid === id) showNowPlaying(id, meta.title);
+        })
+        .catch(() => {});
+    }
+    /* desktop EXE: autoplay the first link — the EXE disables the browser
+       autoplay restriction, so she starts playing it right away */
+    if (window.joiDesktop && ids.length) {
+      setTimeout(() => {
+        const first = bubble.querySelector('.media-host');
+        if (first) {
+          playYtHost(first);
+          addMsg('joi', `<span class="em">media</span>${mdEscape('Playing that for you.')}`, 'now playing');
+          setExpr('playful');
+        }
+      }, 500);
+    }
+  }
+
   /* ---------------- TTS with lip-sync ----------------
      INCREMENTAL + BATCHED: she speaks sentence-by-sentence as the reply
      streams in, so her voice starts almost immediately instead of waiting
@@ -456,7 +569,9 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     text = text.trim();
     if (!text) return;
     initEngine();
-    addMsg('user', mdInline(mdEscape(text)), 'you');
+    const userBubble = addMsg('user', mdInline(mdEscape(text)), 'you');
+    const ytIds = extractYtIds(text);
+    if (ytIds.length) attachMedia(userBubble, ytIds);
     input.value = '';
     autoGrow();
 
@@ -597,7 +712,12 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
       flushBatch();
       if (!started) throw new Error('Empty reply from the model.');
       think.remove();
-      if (currentBubble) currentBubble.innerHTML = mdRender(acc);
+      if (currentBubble) {
+        currentBubble.innerHTML = mdRender(acc);
+        /* if her reply itself contains a YouTube link, unfurl it too */
+        const replyYt = extractYtIds(acc);
+        if (replyYt.length) attachMedia(currentBubble, replyYt);
+      }
       currentAbort = null;
       history.push({ role: 'assistant', text: acc });
       setCtx(promptEst + genTokens);

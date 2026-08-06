@@ -187,6 +187,38 @@ async function handleModels(res) {
   }
 }
 
+/* ---------------- /api/yt-meta (YouTube link unfurl for media cards) ----------------
+   No API key needed — YouTube's public oEmbed endpoint returns the title and
+   author for any watch/short link. We keep the last results cached so opening
+   a link twice never re-hits the network. The thumbnail always comes from
+   YouTube's own i.ytimg.com CDN (highest resolution available). */
+const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/;
+const ytMetaCache = new Map();
+
+async function handleYtMeta(res, videoId) {
+  const id = String(videoId || '').trim();
+  if (!YT_ID_RE.test(id)) return sendJson(res, 400, { error: 'Invalid YouTube video id' });
+  if (ytMetaCache.has(id)) return sendJson(res, 200, ytMetaCache.get(id));
+
+  const meta = { id, title: '', author: '', thumb: `https://i.ytimg.com/vi/${id}/hqdefault.jpg` };
+  try {
+    const oembedUrl =
+      'https://www.youtube.com/oembed?format=json&url=' +
+      encodeURIComponent('https://www.youtube.com/watch?v=' + id);
+    const r = await fetch(oembedUrl, {
+      signal: AbortSignal.timeout(6000),
+      headers: { 'User-Agent': 'Mozilla/5.0 JOI-Holographic-Companion' },
+    });
+    if (r.ok) {
+      const j = await r.json();
+      meta.title = String(j.title || '');
+      meta.author = String(j.author_name || '');
+    }
+  } catch { /* offline → thumbnail-only card */ }
+  ytMetaCache.set(id, meta);
+  return sendJson(res, 200, meta);
+}
+
 /* ---------------- /api/chat ---------------- */
 
 function toOpenAIStream(headers) {
@@ -639,6 +671,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url.pathname === '/api/memory') return handleMemorySet(req, res);
   if (req.method === 'POST' && url.pathname === '/api/memory/clear') return handleMemoryClear(res);
   if (req.method === 'GET' && url.pathname === '/api/audio-clips') return handleAudioClips(res);
+  if (req.method === 'GET' && url.pathname === '/api/yt-meta') return handleYtMeta(res, url.searchParams.get('v'));
   if (req.method === 'POST' && url.pathname === '/api/tts') return handleTTS(req, res);
   if (req.method === 'POST' && url.pathname === '/api/server/stop') return handleServerStop(res);
   if (req.method === 'POST' && url.pathname === '/api/server/restart') return handleServerRestart(res);
