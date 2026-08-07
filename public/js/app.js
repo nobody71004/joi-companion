@@ -12,7 +12,7 @@
   const $$ = (s) => [...document.querySelectorAll(s)];
   const SKEY = 'joi.app.v2';
   const loadPrefs = () => {
-    try { return Object.assign({ provider: 'ollama', model: '', base: '', key: '', temp: 0.7, voice: 'en-US-MichelleNeural', autoSpeak: true, forceCPU: false }, JSON.parse(localStorage.getItem(SKEY) || '{}')); }
+    try { return Object.assign({ provider: 'ollama', model: '', base: '', key: '', temp: 0.7, voice: 'en-US-MichelleNeural', autoSpeak: true, forceCPU: false, persona: 'joi', delamainBackend: 'sim', delamainVoice: 'en-GB-RyanNeural' }, JSON.parse(localStorage.getItem(SKEY) || '{}')); }
     catch { return {}; }
   };
   let prefs = loadPrefs();
@@ -29,6 +29,7 @@
     custom:    { label: 'Custom (OpenAI-compatible)', base: '', key: false },
   };
   const VOICES = {
+    /* female — JOI's voices */
     'en-US-MichelleNeural': 'Michelle — friendly (default)',
     'en-US-JennyNeural': 'Jenny — warm & gentle',
     'en-US-AriaNeural': 'Aria — confident',
@@ -41,6 +42,15 @@
     'en-AU-NatashaNeural': 'Natasha — Australian',
     'en-CA-ClaraNeural': 'Clara — Canadian',
     'en-IE-EmilyNeural': 'Emily — Irish',
+    /* male — DELAMAIN's voices */
+    'en-GB-RyanNeural': 'Ryan — British & refined (DELAMAIN)',
+    'en-GB-ThomasNeural': 'Thomas — British & steady',
+    'en-US-GuyNeural': 'Guy — US & conversational',
+    'en-US-ChristopherNeural': 'Christopher — US & deep',
+    'en-US-EricNeural': 'Eric — US & cool',
+    'en-AU-WilliamNeural': 'William — Australian',
+    'en-CA-LiamNeural': 'Liam — Canadian',
+    'en-IE-ConnorNeural': 'Connor — Irish',
   };
 
   /* ---------------- system persona ---------------- */
@@ -64,18 +74,42 @@ How you talk:
 
 The user can hear you, so keep replies natural to speak aloud (no heavy formatting noise).`;
 
-  /* ---------------- face engine ---------------- */
+  /* ---------------- face engine (JOI ⇄ DELAMAIN) ----------------
+     JOI renders her real face from the render; DELAMAIN renders his own
+     look — a fractured obsidian shard-sphere hologram — through the same
+     API (talking / speechImpulse / setExpression / setListening), so lip
+     sync, emotion and the mic ring work for both. Switching personas
+     destroys the old engine's DOM and mounts the other one. */
   let engine = null;
+  let enginePersona = null;
   let fineTune = { eyeY: 0, eyeX: 0, mouthY: 0, mouthX: 0, mouthW: 1, lipH: 1 };
   try { fineTune = Object.assign(fineTune, JSON.parse(localStorage.getItem('joi.finetune') || '{}')); } catch {}
-  function initEngine() {
-    if (engine === JoiLiving) return;
-    engine = JoiLiving;
-    JoiLiving.init('#holo-stage', { src: 'img/images.jpg', preset: 'images', fineTune });
-    const p = (() => { try { return JSON.parse(localStorage.getItem('joi.faceprefs') || '{}'); } catch { return {}; } })();
-    engine.setExpression(p.expr || 'neutral');
-    engine.setHue(p.hue !== undefined ? p.hue : 0);
+  function destroyEngine() {
+    if (!engine) return;
+    const stage = $('#holo-stage');
+    if (stage) { stage.classList.remove('jf-stage', 'dh-stage'); stage.innerHTML = ''; }
+    engine = null;
+    enginePersona = null;
   }
+  function ensureEngine(persona) {
+    const p = persona || prefs.persona;
+    if (engine && enginePersona === p) return;
+    destroyEngine();
+    const stage = $('#holo-stage');
+    if (p === 'delamain') {
+      engine = DelamainHolo;
+      enginePersona = 'delamain';
+      DelamainHolo.init(stage, {});
+    } else {
+      engine = JoiLiving;
+      enginePersona = 'joi';
+      JoiLiving.init(stage, { src: 'img/images.jpg', preset: 'images', fineTune });
+      const fp = (() => { try { return JSON.parse(localStorage.getItem('joi.faceprefs') || '{}'); } catch { return {}; } })();
+      engine.setExpression(fp.expr || 'neutral');
+      engine.setHue(fp.hue !== undefined ? fp.hue : 0);
+    }
+  }
+  const initEngine = () => ensureEngine(prefs.persona);
 
   /* ---------------- expressions ---------------- */
   const chips = $$('#expr-strip .chip');
@@ -85,10 +119,55 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   }
   chips.forEach((c) => c.addEventListener('click', () => setExpr(c.dataset.expr)));
 
+  /* ---------------- persona: JOI ⇄ DELAMAIN ----------------
+     DELAMAIN keeps the SAME animated holographic face (that's the point —
+     he talks through the portrait now, not a terminal) but routes to the
+     in-game agent endpoint, speaks with his own voice and shows a live
+     game-link indicator. */
+  const personaChips = { joi: $('#btn-persona-joi'), delamain: $('#btn-persona-delamain') };
+  const delamainStatus = $('#delamain-status');
+  const dlLinkEl = $('#dl-link');
+  const dlDot = $('#dl-dot');
+  async function refreshDelamainLink() {
+    try {
+      const r = await fetch('/api/delamain/state', { cache: 'no-store' });
+      const j = await r.json();
+      let label = '—', live = false;
+      if (prefs.delamainBackend === 'sim') { label = 'SIMULATED'; live = true; }
+      else if (j.connected) { label = 'GAME LIVE'; live = true; }
+      else label = 'GAME OFFLINE';
+      dlLinkEl.textContent = label;
+      dlDot.classList.toggle('live', live);
+    } catch { dlLinkEl.textContent = '—'; }
+  }
+  function setPersona(p) {
+    prefs.persona = p; savePrefs();
+    /* the whole UI re-themes to his teal/gold energy palette, and the
+       brand name follows the persona */
+    document.body.classList.toggle('delamain-theme', p === 'delamain');
+    const bn = $('#brand-name');
+    if (bn) bn.textContent = p === 'delamain' ? 'DELAMAIN' : 'JOI';
+    document.title = p === 'delamain' ? 'DELAMAIN · In-Game Agent' : 'JOI · Holographic Companion';
+    personaChips.joi.classList.toggle('active', p === 'joi');
+    personaChips.delamain.classList.toggle('active', p === 'delamain');
+    $('#brand-sub').textContent = p === 'delamain' ? 'in-game agent · Night City' : 'holographic companion';
+    delamainStatus.style.display = p === 'delamain' ? '' : 'none';
+    /* swap the portrait itself: JOI's face ⇄ DELAMAIN's shard-sphere */
+    ensureEngine(p);
+    if (calibBtn) calibBtn.style.display = p === 'delamain' ? 'none' : '';  // align features is JOI-only
+    if (calibHint) calibHint.style.display = 'none';
+    if (p === 'delamain') refreshDelamainLink();
+    fallbackVoice = pickVoiceFor(voiceFor());
+  }
+  Object.entries(personaChips).forEach(([p, el]) => el.addEventListener('click', () => setPersona(p)));
+  if ($('#dl-refresh')) $('#dl-refresh').addEventListener('click', refreshDelamainLink);
+  setInterval(() => { if (prefs.persona === 'delamain') refreshDelamainLink(); }, 5000);
+
   /* ---------------- calibrate ---------------- */
   const calibBtn = $('#btn-calibrate');
   const calibHint = $('#calib-hint');
   function enterCalib() {
+    if (prefs.persona === 'delamain') return;   // align features is JOI-only
     initEngine();
     engine.calibrate(true);
     calibBtn.textContent = '◉ Aligning…';
@@ -260,14 +339,18 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   chatTabs.media.addEventListener('click', () => setTab('media'));
 
   function ytPlayerHtml(id) {
-    /* youtube-nocookie.com + a missing `origin` param makes YouTube show
-       "Video unavailable" on embeds loaded from IP addresses (127.0.0.1).
-       Use the standard embed with an explicit origin so the player always
-       trusts the page, plus a fallback link that opens the video in the
-       browser if an embed is ever refused. */
+    /* YouTube refuses embeds whose page origin is a bare IP (127.0.0.1) and
+       blocks embeds without an explicit `origin`. The page auto-redirects
+       to http://localhost (same server) at boot, so origin here is always
+       trustable. youtube-nocookie.com is the privacy-enhanced host that
+       still honors the origin check; widget_referrer + referrerpolicy keep
+       the player trusting us. Fallback: open the video in the real browser. */
     const origin = encodeURIComponent(location.origin);
+    const ref = encodeURIComponent(location.origin + '/');
+    const base = 'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(id) +
+      `?autoplay=1&rel=0&playsinline=1&modestbranding=1&origin=${origin}&widget_referrer=${ref}`;
     return `<div class="mp-embed">` +
-      `<iframe src="https://www.youtube.com/embed/${encodeURIComponent(id)}?autoplay=1&rel=0&playsinline=1&modestbranding=1&origin=${origin}" title="YouTube video player" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>` +
+      `<iframe src="${base}" title="YouTube video player" referrerpolicy="origin" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>` +
       `<div class="mp-embed-bar"><span>♪ keeps playing while you chat</span>` +
       `<a href="https://www.youtube.com/watch?v=${encodeURIComponent(id)}" target="_blank" rel="noopener">Open on YouTube ↗</a></div>` +
       `</div>`;
@@ -314,6 +397,14 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   function playInMedia(id) {
     const v = mediaQueue.find((x) => x.id === id);
     if (!v) return;
+    /* dedupe: if this exact video is already in the player, do NOT recreate
+       the iframe — recreating it with autoplay=1 stacks a second audio
+       stream (the "playing in duplicates" bug) and aborts the old one */
+    const existing = mpPlayer && mpPlayer.querySelector('iframe');
+    if (currentVid === id && existing && existing.src.includes('/embed/' + id)) {
+      setTab('media');
+      return;
+    }
     currentVid = id;
     if (mpPlayer) mpPlayer.innerHTML = ytPlayerHtml(id);
     if (npLabelEl) npLabelEl.textContent = `Now playing — ${v.title}`;
@@ -388,6 +479,7 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   function stopSpeaking() {
     speechGen++;
     speakQueue.length = 0;
+    queuedVoice = null;
     clearBatch();
     busy = false;
     cancelAudio();
@@ -418,6 +510,20 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     pauseBtn.textContent = '⏸ Pause';
   });
 
+  /* streaming replies always use the persona voice — a stray override from
+     an interrupted quote must never leak into them */
+  function queueSentences(growText) {
+    queuedVoice = null;
+    streamTail = (streamTail + growText).replace(/\s+/g, ' ');
+    const parts = sentenceSplit(streamTail);
+    /* keep the last part in the tail unless it ends with punctuation */
+    const done = /[.!?]\s*$/.test(streamTail) ? parts : parts.slice(0, -1);
+    const tail = /[.!?]\s*$/.test(streamTail) ? '' : (parts[parts.length - 1] || '');
+    streamTail = tail;
+    const clean = done.map((s) => s.replace(/```[^`]*/g, ' ').replace(/[*_`#>`~]/g, '').trim()).filter((s) => s.length >= 2);
+    for (const s of clean) queueSpeech(s);
+  }
+
   /* split text into speakable sentences on . ! ? — keeps fragments whole */
   function sentenceSplit(text) {
     const t = String(text || '').replace(/\s+/g, ' ').trim();
@@ -429,20 +535,12 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
 
   /* queue complete sentences from a growing stream; returns leftover */
   let streamTail = '';
-  function queueSentences(growText) {
-    streamTail = (streamTail + growText).replace(/\s+/g, ' ');
-    const parts = sentenceSplit(streamTail);
-    /* keep the last part in the tail unless it ends with punctuation */
-    const done = /[.!?]\s*$/.test(streamTail) ? parts : parts.slice(0, -1);
-    const tail = /[.!?]\s*$/.test(streamTail) ? '' : (parts[parts.length - 1] || '');
-    streamTail = tail;
-    const clean = done.map((s) => s.replace(/```[^`]*/g, ' ').replace(/[*_`#>`~]/g, '').trim()).filter((s) => s.length >= 2);
-    for (const s of clean) queueSpeech(s);
-  }
 
-  /* drop-in replacement for the old speak(): speak a whole text at once */
-  function speak(text) {
+  /* drop-in replacement for the old speak(): speak a whole text at once.
+     Optional voice param overrides the persona voice for a single call. */
+  function speak(text, voice) {
     if (!prefs.autoSpeak || !text) return;
+    queuedVoice = voice || null;
     stopSpeaking();
     for (const s of sentenceSplit(text.replace(/```[\s\S]*?```/g, ' '))) queueSpeech(s);
     pump();
@@ -453,9 +551,12 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     batchTimer = 0;
     if (!pendingBatch.length) return;
     const text = pendingBatch.join(' ');
+    /* stamp the voice onto this batch now (one-shot from speak(text, voice)) */
+    const voice = queuedVoice;
+    queuedVoice = null;
     pendingBatch = [];
     const g = speechGen;
-    speakQueue.push({ text, g });
+    speakQueue.push({ text, g, voice });
     /* generous backlog: nothing is dropped for normal replies, and the
        whole reply is spoken in order even if she lags a few seconds. */
     if (speakQueue.length > 16) speakQueue.shift();
@@ -482,15 +583,24 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     busy = true;
     setExpr('thoughtful');
     playSentence(item)
-      .catch(() => browserFallback(item.text))
+      .catch(() => browserFallback(item.text, item.voice))
       .then(() => { busy = false; pump(); });
   }
 
+  /* which voice is speaking right now: DELAMAIN mode uses his own neural
+     voice (default en-GB-RyanNeural), JOI uses the user's chosen one.
+     speak(text, voice) can override ONE batch (e.g. JOI quotes) — the
+     voice is stamped onto the queue item at flush time so it can never
+     leak across replies. */
+  let queuedVoice = null;
+  const voiceFor = () => (prefs.persona === 'delamain' ? prefs.delamainVoice : prefs.voice);
+
   async function playSentence(item) {
     if (item.g !== speechGen) return;
+    const voice = item.voice || voiceFor();
     const res = await fetch('/api/tts', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: item.text, voice: prefs.voice }),
+      body: JSON.stringify({ text: item.text, voice }),
     });
     if (!res.ok) throw new Error('tts down');
     const buf = await res.arrayBuffer();
@@ -525,6 +635,8 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
         meterRaf = requestAnimationFrame(drive);
       })();
     });
+    /* her mouth must close when the audio ends — never leave talking stuck */
+    if (engine) engine.setTalking(false);
   }
 
   /* pick a FEMALE browser voice for the fallback path — never the male OS
@@ -553,17 +665,38 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     /* 4) last resort: any non-male-named voice */
     return voices.find((v) => !MALE_VOICES.test(v.name)) || voices[0] || null;
   }
-  let fallbackVoice = pickFemaleVoice(prefs.voice);
+  /* browser-fallback voice follows the current persona too: DELAMAIN gets a
+     male-named voice when edge-tts is unavailable (never the generic OS one). */
+  const MALE_FALLBACK_HINTS = /(ryan|thomas|guy|christopher|eric|william|liam|connor|david|mark|george|brian|daniel|james|alex\b)/i;
+  function pickVoiceFor(prefName) {
+    const want = String(prefName || '').toLowerCase();
+    let voices = [];
+    try { voices = window.speechSynthesis.getVoices(); } catch {}
+    if (!voices.length) return null;
+    const firstWord = want.split('-')[1] || '';
+    if (firstWord) {
+      const hit = voices.find((v) => v.name.toLowerCase().includes(firstWord.toLowerCase()));
+      if (hit) return hit;
+    }
+    if (prefs.persona === 'delamain') {
+      return voices.find((v) => MALE_FALLBACK_HINTS.test(v.name))
+        || voices.find((v) => !FEMALE_HINTS.test(v.name))
+        || voices[0] || null;
+    }
+    return pickFemaleVoice(prefName);
+  }
+  let fallbackVoice = pickVoiceFor(voiceFor());
   try {
-    window.speechSynthesis.onvoiceschanged = () => { fallbackVoice = pickFemaleVoice(prefs.voice); };
+    window.speechSynthesis.onvoiceschanged = () => { fallbackVoice = pickVoiceFor(voiceFor()); };
   } catch {}
 
-  function browserFallback(text) {
+  function browserFallback(text, voice) {
     try {
       return new Promise((resolve) => {
         const u = new SpeechSynthesisUtterance(text.slice(0, 2000));
         u.rate = 0.94; u.pitch = 1.12; /* slight lift keeps her sounding female */
-        if (fallbackVoice) u.voice = fallbackVoice;
+        const fv = pickVoiceFor(voice || voiceFor());
+        if (fv) u.voice = fv;
         u.onstart = () => { if (engine) engine.setTalking(true); };
         u.onboundary = () => { if (engine) engine.speechImpulse(1); };
         u.onend = () => { if (engine) engine.setTalking(false); resolve(); };
@@ -580,20 +713,31 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     const b = addMsg('joi quote', `<span class="em">Joi · Blade Runner</span>${mdInline(mdEscape(q))}`, 'quote');
     void b;
     setExpr('playful');
-    speak(q);
+    speak(q, prefs.voice); // quotes are always JOI's voice
   }
   $('#btn-quote').addEventListener('click', () => sayQuote());
 
   /* ---------------- streaming chat ---------------- */
+  let lastSentText = '', lastSentAt = 0;
   async function sendMessage(text) {
     text = text.trim();
     if (!text) return;
+    /* debounce: a double-click / double-paste fires sendMessage twice with
+       the same text a few ms apart — drop the second copy so the message
+       (and any YouTube autoplay) never duplicates */
+    const now = Date.now();
+    if (text === lastSentText && now - lastSentAt < 900) return;
+    lastSentText = text; lastSentAt = now;
     initEngine();
     const userBubble = addMsg('user', mdInline(mdEscape(text)), 'you');
     const ytIds = extractYtIds(text);
     if (ytIds.length) attachMedia(userBubble, ytIds);
     input.value = '';
     autoGrow();
+
+    /* DELAMAIN mode: same face + speech pipeline, routed to the in-game
+       agent (Ollama tool-calling loop against the Cyberpunk CET bridge) */
+    if (prefs.persona === 'delamain') return sendDelamain(text);
 
     /* second brain: catch name + facts + episodes */
     const name = JOIMemory.extractName(text);
@@ -789,18 +933,191 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   }
   input.addEventListener('input', autoGrow);
 
-  /* ---------------- voice input (speech → text) ---------------- */
+  /* ---------------- DELAMAIN mode (in-game agent) ----------------
+     Same holographic face, same streaming + lip-synced speech pipeline —
+     but routed to /api/delamain, which runs the Ollama tool-calling loop
+     against the Cyberpunk 2077 CET bridge. Each ⚙ tool call renders as a
+     compact line in its own bubble, then his reply streams in and is
+     spoken with Delamain's voice. Pause / Stop work exactly like JOI's. */
+  async function sendDelamain(text) {
+    text = text.trim();
+    if (!text) return;
+    initEngine();
+    /* NOTE: sendMessage() already rendered the user bubble before routing
+       here — do NOT addMsg('user', …) again or the message duplicates. */
+    input.value = ''; autoGrow();
+
+    /* the second brain still learns from what you say to him */
+    const dname = JOIMemory.extractName(text);
+    if (dname) { JOIMemory.setName(dname); refreshMemUI(); }
+    JOIMemory.extractFacts(text).forEach((f) => JOIMemory.addFact(f));
+
+    history.push({ role: 'user', text });
+    if (history.length > 30) history = history.slice(-30);
+
+    /* short continuity: hand him the last exchange so follow-ups like
+       "now set the time too" keep the thread (the agent loop itself is
+       stateless per request) */
+    const recent = history.slice(-3, -1);
+    let goal = text;
+    if (recent.length) {
+      const ctx = recent
+        .map((m) => (m.role === 'user' ? 'Customer: ' : 'You replied: ') + m.text.slice(0, 160))
+        .join('\n');
+      goal = 'RECENT CONTEXT (use only if relevant):\n' + ctx + '\n\nCURRENT REQUEST: ' + text;
+    }
+
+    const think = addThinking();
+    setExpr('thoughtful');
+    const promptEst = Math.max(1, Math.ceil(goal.length / 4));
+    setCtx(promptEst);
+    let acc = '', started = false, toolBox = null;
+    currentAcc = ''; currentBubble = null; paused = false; pausedBuf = '';
+    pauseBtn.textContent = '⏸ Pause';
+    if (currentAbort) { try { currentAbort.abort(); } catch {} }
+    currentAbort = new AbortController();
+    stopGenTimer(0);
+
+    try {
+      const res = await fetch('/api/delamain', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ goal, model: prefs.model, backend: prefs.delamainBackend }),
+        signal: currentAbort.signal,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || ('HTTP ' + res.status));
+      }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) !== -1) {
+          const block = buf.slice(0, idx); buf = buf.slice(idx + 2);
+          if (!block.startsWith('data:')) continue;
+          const payload = block.replace(/^data:\s*/, '').trim();
+          if (!payload || payload === '[DONE]') continue;
+          let msg;
+          try { msg = JSON.parse(payload); } catch { continue; }
+          if (msg.error) throw new Error(msg.error);
+          /* tool-call event from the agent loop */
+          if (msg.tool) {
+            const t = msg.tool;
+            if (!toolBox) { think.remove(); toolBox = addMsg('delamain tools', ''); startGenTimer(); }
+            const line = document.createElement('div');
+            line.className = 'tool-line ' + (t.ok ? 'ok' : 'fail');
+            line.innerHTML =
+              `<span class="tl-ic">⚙</span><span class="tl-name">${mdEscape(t.name)}</span>` +
+              `<span class="tl-args">${mdEscape(JSON.stringify(t.args || {}))}</span>` +
+              `<span class="tl-res">${t.ok ? '✓ ' + mdEscape(String(t.result || 'done')) : '✗ ' + mdEscape(String(t.error || 'failed'))}</span>`;
+            toolBox.appendChild(line);
+            log.scrollTop = log.scrollHeight;
+            continue;
+          }
+          const delta = msg.choices && msg.choices[0] && msg.choices[0].delta && msg.choices[0].delta.content;
+          if (!delta) continue;
+          acc += delta; currentAcc = acc;
+          genTokens += Math.max(1, Math.ceil(delta.length / 4));
+          if (!started) {
+            think.remove(); started = true;
+            if (!genStart) startGenTimer();
+            currentBubble = addMsg('delamain', '');
+            stopSpeaking(); // reset the speech pipeline for this reply
+          }
+          if (paused) {
+            pausedBuf += delta;
+          } else {
+            queueSentences(delta);
+            if (currentBubble) currentBubble.innerHTML = mdRender(acc);
+            log.scrollTop = log.scrollHeight;
+          }
+          setCtx(promptEst + genTokens);
+        }
+      }
+      /* speak whatever is left over, then flush the final batch promptly */
+      if (streamTail.trim()) {
+        const tail = streamTail.replace(/```[^`]*/g, ' ').replace(/[*_`#>`~]/g, '').trim();
+        if (paused) pausedBuf += ' ' + tail; else queueSpeech(tail);
+        streamTail = '';
+      }
+      flushBatch();
+      if (!started) throw new Error('Empty reply from DELAMAIN.');
+      think.remove();
+      if (currentBubble) currentBubble.innerHTML = mdRender(acc);
+      currentAbort = null;
+      history.push({ role: 'assistant', text: acc });
+      setCtx(promptEst + genTokens);
+      stopGenTimer(genTokens);
+      setExpr('happy');
+    } catch (err) {
+      think.remove();
+      stopGenTimer(0);
+      stopSpeaking();
+      streamTail = '';
+      currentAbort = null;
+      if (err && err.name === 'AbortError') {
+        if (started && currentBubble && currentAcc.trim()) {
+          currentBubble.innerHTML = mdRender(currentAcc) +
+            '<span class="em" style="margin-top:6px">⏹ stopped — partial reply kept</span>';
+          history.push({ role: 'assistant', text: currentAcc });
+        }
+        setExpr('neutral');
+        return;
+      }
+      addMsg('delamain', `<span class="em">connection</span>${mdInline(mdEscape(String(err.message || err)))}`, 'signal lost');
+      setExpr('sad');
+      console.error(err);
+    }
+  }
+
+  /* ---------------- voice input (speech → text) ----------------
+     Preferred path: the local offline /api/voice (winmm + Windows speech,
+     no Google cloud — works in the EXE and on restricted networks). Web
+     Speech API is only a fallback if the server endpoint is unreachable. */
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let rec = null, listening = false;
+  let rec = null, listening = false, voiceRecording = false;
   const micBtn = $('#btn-mic');
   const tlRec = $('#tl-rec');
   function stopMic() {
     if (rec) { try { rec.stop(); } catch {} }
-    listening = false;
+    listening = false; voiceRecording = false;
     micBtn.classList.remove('listening');
     micBtn.textContent = '🎤';
     tlRec.style.display = 'none';
     if (engine) engine.setListening(0);
+  }
+  /* server-side offline capture — records for N seconds, then the
+     transcript comes back and is sent like typed text */
+  async function localVoiceCapture() {
+    if (voiceRecording) return;
+    voiceRecording = true;
+    micBtn.classList.add('listening'); micBtn.textContent = '◉';
+    tlRec.textContent = '◉ listening (offline)…';
+    tlRec.style.display = '';
+    if (engine) engine.setListening(0.7);
+    try {
+      const res = await fetch('/api/voice', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seconds: 4 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.ok && data.text && data.text.trim()) {
+        input.value = (input.value ? input.value + ' ' : '') + data.text.trim();
+        autoGrow();
+        stopMic();
+        sendMessage(input.value);
+      } else {
+        stopMic();
+        addMsg('joi', `<span class="em">voice</span>${mdInline(mdEscape(String(data.error || 'Sorry, I did not catch that — try again?')))}`, 'connection');
+      }
+    } catch (err) {
+      stopMic();
+      addMsg('joi', `<span class="em">voice</span>${mdInline(mdEscape(String(err.message || err)))}`, 'connection');
+    }
   }
   if (SR) {
     rec = new SR();
@@ -808,6 +1125,7 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     rec.onstart = () => {
       listening = true;
       micBtn.classList.add('listening'); micBtn.textContent = '◉';
+      tlRec.textContent = '◉ listening…';
       tlRec.style.display = '';
       if (engine) engine.setListening(0.7);
       let lvl = 0.3;
@@ -832,14 +1150,14 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     };
     rec.onend = stopMic;
     rec.onerror = (e) => { console.warn('mic:', e.error); stopMic(); };
-    micBtn.addEventListener('click', () => {
-      if (listening) { stopMic(); return; }
-      try { rec.start(); } catch { stopMic(); }
-    });
-  } else {
-    micBtn.title = 'Voice input not supported in this browser';
-    micBtn.style.opacity = 0.4;
   }
+  micBtn.addEventListener('click', () => {
+    if (listening) { stopMic(); return; }
+    if (voiceRecording) return;
+    /* always try the offline local capture first — it does not need the
+       cloud and works identically in the EXE and the browser */
+    localVoiceCapture();
+  });
 
   /* ---------------- settings ---------------- */
   const drawer = $('#settings-drawer');
@@ -982,15 +1300,19 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   /* voice — settings drawer + quick picker stay in sync */
   const voiceSel = $('#set-voice');
   const quickVoice = $('#quick-voice');
+  const delamainVoiceSel = $('#set-delamain-voice');
   const fillVoices = () => {
     voiceSel.innerHTML = '';
     quickVoice.innerHTML = '';
+    if (delamainVoiceSel) delamainVoiceSel.innerHTML = '';
     Object.entries(VOICES).forEach(([v, label]) => {
       voiceSel.add(new Option(label, v));
       quickVoice.add(new Option(label, v));
+      if (delamainVoiceSel) delamainVoiceSel.add(new Option(label, v));
     });
     voiceSel.value = prefs.voice;
     quickVoice.value = prefs.voice;
+    if (delamainVoiceSel) delamainVoiceSel.value = prefs.delamainVoice;
   };
   fillVoices();
   const onVoiceChange = (el) => () => {
@@ -1001,6 +1323,24 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   };
   voiceSel.addEventListener('change', onVoiceChange(voiceSel));
   quickVoice.addEventListener('change', onVoiceChange(quickVoice));
+  if (delamainVoiceSel) {
+    delamainVoiceSel.addEventListener('change', () => {
+      prefs.delamainVoice = delamainVoiceSel.value;
+      savePrefs();
+      fallbackVoice = pickVoiceFor(voiceFor());
+    });
+  }
+
+  /* DELAMAIN — game backend (sim vs live CET bridge) */
+  const delamainBackendSel = $('#set-delamain-backend');
+  if (delamainBackendSel) {
+    delamainBackendSel.value = prefs.delamainBackend;
+    delamainBackendSel.addEventListener('change', () => {
+      prefs.delamainBackend = delamainBackendSel.value;
+      savePrefs();
+      if (prefs.persona === 'delamain') refreshDelamainLink();
+    });
+  }
   const autoSpeakInput = $('#set-auto-speak');
   autoSpeakInput.checked = prefs.autoSpeak;
   autoSpeakInput.addEventListener('change', () => {
@@ -1185,6 +1525,22 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     serverUp = true;
     initEngine();
     ctxLimitEl.textContent = fmtTok(ctxLimit);
+    /* restore the persona from the last session (JOI ⇄ DELAMAIN) */
+    document.body.classList.toggle('delamain-theme', prefs.persona === 'delamain');
+    const bn = $('#brand-name');
+    if (bn) bn.textContent = prefs.persona === 'delamain' ? 'DELAMAIN' : 'JOI';
+    document.title = prefs.persona === 'delamain' ? 'DELAMAIN · In-Game Agent' : 'JOI · Holographic Companion';
+    personaChips.joi.classList.toggle('active', prefs.persona !== 'delamain');
+    personaChips.delamain.classList.toggle('active', prefs.persona === 'delamain');
+    $('#brand-sub').textContent = prefs.persona === 'delamain' ? 'in-game agent · Night City' : 'holographic companion';
+    delamainStatus.style.display = prefs.persona === 'delamain' ? '' : 'none';
+    if (prefs.persona === 'delamain') {
+      /* mount his shard-sphere hologram right away */
+      ensureEngine('delamain');
+      calibBtn.style.display = 'none';
+      refreshDelamainLink();
+    }
+    fallbackVoice = pickVoiceFor(voiceFor());
     /* updates: show the running build version next to the download button,
        and compare against the newest GitHub release for the banner */
     let currentVersion = null;
@@ -1206,13 +1562,21 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     baseInput.value = prefs.base || '';
     keyInput.value = prefs.key;
     await refreshModels();
-    /* warm greeting with a Blade Runner quote */
+    /* warm greeting with a Blade Runner quote — quote, pronouns and name
+       all follow the persona */
     const name = JOIMemory.getName();
+    const isDel = prefs.persona === 'delamain';
     setTimeout(() => {
-      const q = JOIQuotes.forCategory('greeting');
-      addMsg('joi quote', `<span class="em">Joi · Blade Runner</span>${mdInline(mdEscape(q))}`, 'she remembers you');
+      const q = JOIQuotes.greetingFor(prefs.persona);
+      addMsg('joi quote', `<span class="em">${isDel ? 'Delamain · Night City' : 'Joi · Blade Runner'}</span>${mdInline(mdEscape(q))}`, isDel ? 'he remembers you' : 'she remembers you');
       if (name) {
-        setTimeout(() => addMsg('joi', mdInline(mdEscape(`I remember you, ${name}. I always told you — you were special.`) + ` <span style="opacity:.55;font-size:11px">(say hello, ask me anything, or throw a problem at me — code, life, whatever.)</span>`), 'companion'), 1400);
+        const greet = isDel
+          ? `I remember you, ${name}. Welcome back, valued customer.`
+          : `I remember you, ${name}. I always told you — you were special.`;
+        const hint = isDel
+          ? '(say hello, give me a task, or throw a problem at me — code, life, whatever.)'
+          : '(say hello, ask me anything, or throw a problem at me — code, life, whatever.)';
+        setTimeout(() => addMsg('joi', mdInline(mdEscape(greet)) + ` <span style="opacity:.55;font-size:11px">${hint}</span>`, 'companion'), 1400);
       }
       setTimeout(() => speak(q), 2400);
     }, 700);

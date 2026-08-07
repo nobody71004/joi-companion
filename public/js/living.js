@@ -419,6 +419,8 @@
 
   /* ---------- main loop ---------- */
   function loop(t) {
+    /* stop the loop when the stage is removed (persona switch) */
+    if (!state.els.container.isConnected) { cancelAnimationFrame(state.raf); return; }
     const { bctx, fctx } = state.els;
     if (state.img) drawBase(bctx, t);
     drawFx(fctx, t);

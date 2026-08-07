@@ -627,3 +627,232 @@ input[type="range"] { width: 100%; accent-color: #ff9ecb; margin-top: 6px; }
   .ub-text { font-size: 12px; }
   .ub-btn { padding: 5px 10px; font-size: 11px; }
 }
+
+/* ============ DELAMAIN persona (JOI ⇄ DELAMAIN) ============ */
+.persona-row {
+  display: flex; gap: 6px; flex-wrap: wrap; justify-content: center;
+}
+#btn-persona-delamain.active {
+  color: #03120f;
+  background: linear-gradient(135deg, #7df0c9, #3ad0b0 50%, #2b8fd8);
+  border-color: #6fe9c4;
+  box-shadow: 0 0 18px rgba(70, 220, 190, 0.45);
+}
+#btn-persona-joi.active {
+  color: #17060f;
+  background: linear-gradient(135deg, #ffc9e4, #e48ad0 55%, #b06fe0);
+  border-color: #ffb7dc;
+  box-shadow: 0 0 18px rgba(255, 150, 200, 0.4);
+}
+
+/* game-link status row under the portrait */
+.delamain-status {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; letter-spacing: 1.6px; text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.delamain-status b { color: var(--ink); font-weight: 500; }
+.dl-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #5a6270;
+  flex: 0 0 auto;
+}
+.dl-dot.live {
+  background: #3ad0b0;
+  box-shadow: 0 0 10px #3ad0b0;
+  animation: dlPulse 1.3s ease-in-out infinite;
+}
+@keyframes dlPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.82); }
+}
+.dl-refresh { padding: 4px 8px; font-size: 10.5px; }
+
+/* DELAMAIN reply bubbles — cyan border, distinct from JOI's pink */
+.msg.delamain { align-self: flex-start; align-items: flex-start; }
+.msg.delamain .msg.meta { padding-left: 4px; }
+.msg.delamain .bubble {
+  background: linear-gradient(180deg, rgba(14, 40, 42, 0.72), rgba(8, 20, 24, 0.85));
+  border: 1px solid rgba(90, 220, 190, 0.35);
+  border-bottom-left-radius: 5px;
+  color: #eaf6f2;
+  box-shadow: 0 0 18px rgba(60, 200, 170, 0.07);
+}
+.msg.delamain .bubble .em { color: #63e0bd; }
+
+/* tool-call bubble: compact dispatcher readout */
+.msg.delamain-tools { align-self: flex-start; max-width: 94%; }
+.msg.delamain-tools .bubble {
+  padding: 8px 12px;
+  background: rgba(4, 12, 16, 0.82);
+  border: 1px solid rgba(90, 220, 190, 0.2);
+  border-radius: 10px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.tool-line {
+  display: flex; align-items: baseline; gap: 7px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; line-height: 1.5;
+  color: #c7ded8;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tl-ic { flex: 0 0 auto; color: #3ad0b0; }
+.tl-name { flex: 0 0 auto; color: #6fe9c4; font-weight: 500; }
+.tl-args { flex: 0 1 auto; color: #7f95a0; overflow: hidden; text-overflow: ellipsis; }
+.tl-res { flex: 0 0 auto; }
+.tool-line.ok .tl-res { color: #7dffc9; }
+.tool-line.fail .tl-res { color: #ff8a8a; }
+.tool-line.fail { border-left: 2px solid rgba(255, 120, 120, 0.6); padding-left: 6px; }
+
+/* ============ DELAMAIN shard-sphere stage (delamain-holo.js) ============
+   His own hologram: a fractured obsidian sphere with teal/gold energy.
+   Shares the #holo-stage box sizing from .stage-frame; only the chrome,
+   palette and watermark differ from JOI's .jf-stage. */
+.dh-stage {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  border-radius: 16px;
+  border: 1px solid rgba(61, 242, 255, 0.26);
+  box-shadow:
+    0 0 80px rgba(45, 210, 255, 0.13),
+    0 30px 80px rgba(0, 0, 0, 0.6),
+    inset 0 0 90px rgba(0, 0, 0, 0.55);
+  background:
+    radial-gradient(140% 90% at 50% 0%, #0b2331 0%, #0a111f 46%, #04060c 100%);
+}
+.dh-stage::before {
+  content: "";
+  position: absolute; inset: 0;
+  background:
+    repeating-linear-gradient(0deg, rgba(61, 242, 255, 0.045) 0 1px, transparent 1px 56px),
+    repeating-linear-gradient(90deg, rgba(61, 242, 255, 0.045) 0 1px, transparent 1px 56px);
+  z-index: 0;
+}
+.dh-stage::after {
+  /* floor glow under the sphere */
+  content: "";
+  position: absolute; left: 8%; right: 8%; bottom: 4%; height: 18%;
+  background: radial-gradient(50% 100% at 50% 100%, rgba(61, 242, 255, 0.13), transparent 70%);
+  filter: blur(14px);
+  z-index: 0;
+}
+.dh-base { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; }
+.dh-scanlines {
+  position: absolute; inset: 0; z-index: 3; pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.16) 0 1px, transparent 1px 3px);
+  opacity: 0.42;
+  mix-blend-mode: multiply;
+}
+.dh-vignette {
+  position: absolute; inset: 0; z-index: 3; pointer-events: none;
+  background: radial-gradient(115% 115% at 50% 45%, transparent 55%, rgba(2, 3, 8, 0.62) 100%);
+}
+.dh-watermark {
+  position: absolute; left: 0; right: 0; bottom: 12px; z-index: 4;
+  text-align: center;
+  font-family: 'Cinzel', Georgia, serif;
+  font-size: 11px; letter-spacing: 11px;
+  color: rgba(120, 240, 255, 0.30);
+  pointer-events: none;
+  text-shadow: 0 0 14px rgba(61, 242, 255, 0.4);
+}
+.dh-wave {
+  position: absolute; bottom: 7%; left: 50%; transform: translateX(-50%);
+  width: 42%; height: 26px; z-index: 4;
+  opacity: 0; transition: opacity 0.25s ease;
+  filter: drop-shadow(0 0 6px rgba(61, 242, 255, 0.5));
+}
+
+/* ============ DELAMAIN THEME (body.delamain-theme) ============
+   Toggling the persona to DELAMAIN re-themes the whole UI to his
+   teal/gold energy palette (the shard-sphere's colors) instead of
+   JOI's pink/violet. Variables do the heavy lifting; the overrides
+   below re-tint the hardcoded pinks. */
+body.delamain-theme {
+  --pink: #6fe9c4;
+  --violet: #2b8fd8;
+  --pink-dim: rgba(110, 233, 196, 0.62);
+  --pink-faint: rgba(110, 233, 196, 0.16);
+  --bg-1: #0a1620;
+  --bg-2: #10202e;
+  background:
+    radial-gradient(1100px 640px at 28% 8%, #12303c 0%, transparent 58%),
+    radial-gradient(900px 620px at 78% 92%, #14302a 0%, transparent 55%),
+    radial-gradient(700px 500px at 70% 20%, #0d2430 0%, transparent 60%),
+    #04060c;
+}
+body.delamain-theme .fog {
+  background:
+    radial-gradient(46% 34% at 22% 78%, rgba(110, 233, 196, 0.10), transparent 70%),
+    radial-gradient(42% 30% at 84% 22%, rgba(43, 143, 216, 0.10), transparent 70%),
+    radial-gradient(50% 38% at 55% 55%, rgba(255, 210, 120, 0.08), transparent 70%);
+}
+body.delamain-theme .topbar { border-bottom-color: rgba(110, 233, 196, 0.18); }
+/* the longer name needs a tighter letter-spacing to stay elegant */
+body.delamain-theme .brand-name { font-size: 19px; letter-spacing: 6px; }
+body.delamain-theme .blink-cursor::after { color: #6fe9c4; }
+body.delamain-theme .ctx-fill { background: linear-gradient(90deg, #35e0a0, #ffd24a 70%, #ff9ecb); }
+body.delamain-theme .chip { border-color: rgba(110, 233, 196, 0.26); }
+body.delamain-theme .chip:hover { border-color: rgba(110, 233, 196, 0.65); background: rgba(110, 233, 196, 0.09); }
+body.delamain-theme .chip.active {
+  color: #03120f;
+  background: linear-gradient(135deg, #7df0c9, #3ad0b0 50%, #2b8fd8);
+  border-color: #6fe9c4;
+  box-shadow: 0 0 18px rgba(70, 220, 190, 0.45);
+}
+body.delamain-theme .btn { border-color: rgba(110, 233, 196, 0.26); }
+body.delamain-theme .btn:hover {
+  border-color: rgba(110, 233, 196, 0.6);
+  background: rgba(110, 233, 196, 0.09);
+  box-shadow: 0 4px 18px rgba(70, 220, 190, 0.14);
+}
+body.delamain-theme .btn.active {
+  color: #03120f;
+  background: linear-gradient(135deg, #7df0c9, #3ad0b0 55%, #2b8fd8);
+  border-color: #6fe9c4;
+  box-shadow: 0 0 20px rgba(70, 220, 190, 0.4);
+}
+body.delamain-theme .btn.primary {
+  background: linear-gradient(135deg, rgba(125, 240, 201, 0.16), rgba(43, 143, 216, 0.16));
+  border-color: rgba(110, 233, 196, 0.4);
+}
+body.delamain-theme .select, body.delamain-theme .input { border-color: rgba(110, 233, 196, 0.26); }
+body.delamain-theme .select:hover, body.delamain-theme .select:focus,
+body.delamain-theme .input:focus { border-color: rgba(110, 233, 196, 0.55); }
+body.delamain-theme #chat-input { border-color: rgba(110, 233, 196, 0.24); }
+body.delamain-theme #chat-input:focus { border-color: rgba(110, 233, 196, 0.6); }
+body.delamain-theme .chat-input-row { border-top-color: rgba(110, 233, 196, 0.16); }
+body.delamain-theme .chat-log { scrollbar-color: rgba(110, 233, 196, 0.3) transparent; }
+body.delamain-theme .bottombar { border-top-color: rgba(110, 233, 196, 0.18); }
+body.delamain-theme .typing i { background: #6fe9c4; }
+body.delamain-theme .range-val { color: rgba(110, 233, 196, 0.75); }
+body.delamain-theme .msg.joi .bubble { border-color: rgba(110, 233, 196, 0.2); }
+body.delamain-theme .bubble b, body.delamain-theme .bubble strong { color: #bff5e8; }
+body.delamain-theme .msg.quote .bubble { border-color: rgba(255, 210, 120, 0.5); }
+body.delamain-theme .tab { border-color: rgba(110, 233, 196, 0.24); }
+body.delamain-theme .tab:hover { border-color: rgba(110, 233, 196, 0.5); }
+body.delamain-theme .tab.active {
+  color: #03120f;
+  background: linear-gradient(135deg, #7df0c9, #3ad0b0 55%, #2b8fd8);
+  border-color: #6fe9c4;
+  box-shadow: 0 -4px 18px rgba(70, 220, 190, 0.25);
+}
+body.delamain-theme .switch { border-color: rgba(110, 233, 196, 0.3); }
+body.delamain-theme .switch-row input:checked + .switch {
+  background: rgba(110, 233, 196, 0.3);
+  border-color: #6fe9c4;
+}
+body.delamain-theme .switch-row input:checked + .switch::after {
+  background: #6fe9c4;
+  box-shadow: 0 0 8px rgba(110, 233, 196, 0.7);
+}
+body.delamain-theme .drawer { border-left-color: rgba(110, 233, 196, 0.18); }
+body.delamain-theme .drawer-head { border-bottom-color: rgba(110, 233, 196, 0.18); }
+
+@media (max-width: 880px) {
+  .persona-row .chip { padding: 6px 10px; font-size: 10.5px; }
+  .tool-line { font-size: 10px; }
+}

@@ -88,7 +88,8 @@ echo "    ✓ EXE rebuilt ($EXE_MB MB)"
 
 # ---- 4. sync source into the clean repo (no data/, venv, modules)
 echo "  · syncing source…"
-cp "$SRC/server.js" "$SRC/package.json" "$SRC/Start-JOI.bat" "$SRC/Stop-JOI.bat" "$DST/"
+cp "$SRC/server.js" "$SRC/delamain.js" "$SRC/package.json" "$SRC/Start-JOI.bat" "$SRC/Stop-JOI.bat" "$DST/"
+cp "$SRC/voice_capture.ps1" "$DST/voice_capture.ps1" 2>/dev/null || true
 cp -r "$SRC/electron/." "$DST/electron/"
 cp -r "$SRC/public/." "$DST/public/"
 mkdir -p "$DST/build"

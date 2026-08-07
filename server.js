@@ -19,6 +19,12 @@ const HOST = '127.0.0.1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_BODY = 4 * 1024 * 1024; // 4 MB request cap
 
+/* DELAMAIN — the in-game agent (Cyberpunk 2077 + Ollama tool-calling).
+   Lives in delamain.js so /api/delamain can run the same loop the
+   cyber-agent CLI uses, streamed to the face UI over SSE. */
+const delamain = require('./delamain.js');
+const DELAMAIN_IPC = process.env.DELAMAIN_IPC || delamain.defaultIpcDir;
+
 /* When packaged as a desktop EXE (Electron), __dirname points inside the
    read-only app.asar, so the TTS venv and the memory file must live next
    to the executable instead. */
@@ -494,6 +500,7 @@ if (!fs.existsSync(PY)) {
 }
 
 const TTS_VOICES = {
+  /* female — JOI's voices */
   'en-US-MichelleNeural': 'Friendly (default)',
   'en-US-JennyNeural': 'Warm & gentle',
   'en-US-AriaNeural': 'Confident',
@@ -506,9 +513,80 @@ const TTS_VOICES = {
   'en-AU-NatashaNeural': 'Australian',
   'en-CA-ClaraNeural': 'Canadian',
   'en-IE-EmilyNeural': 'Irish',
+  /* male — DELAMAIN's voices */
+  'en-GB-RyanNeural': 'Ryan — British & refined (DELAMAIN)',
+  'en-GB-ThomasNeural': 'Thomas — British & steady',
+  'en-US-GuyNeural': 'Guy — US & conversational',
+  'en-US-ChristopherNeural': 'Christopher — US & deep',
+  'en-US-EricNeural': 'Eric — US & cool',
+  'en-AU-WilliamNeural': 'William — Australian',
+  'en-CA-LiamNeural': 'Liam — Canadian',
+  'en-IE-ConnorNeural': 'Connor — Irish',
 };
 
 const TTS_SETUP_HINT = 'cd joi-companion && python -m venv venv && venv/Scripts/python.exe -m pip install edge-tts';
+
+/* ---------------- /api/voice (offline mic input, no cloud) ----------------
+   One-shot winmm capture + Windows System.Speech dictation. The Web Speech
+   API needs Google's cloud (fails with 'network' in the EXE / restricted
+   networks), so the 🎤 button routes here instead — fully local + offline.
+   The script is spawned fresh per request and writes its result JSON to a
+   temp file; packaged EXE keeps the script next to the executable. */
+function findVoiceScript() {
+  const cands = [
+    path.join(__dirname, 'voice_capture.ps1'),
+    path.join(__dirname, '..', 'resources', 'voice_capture.ps1'),
+  ];
+  if (IS_ELECTRON) {
+    try {
+      const { app } = require('electron');
+      const resDir = path.resolve(app.getAppPath(), '..'); // ...\\resources
+      cands.push(path.join(resDir, 'voice_capture.ps1'));
+      cands.push(path.join(app.getPath('userData'), 'voice_capture.ps1'));
+    } catch { /* ignore */ }
+  }
+  for (const p of cands) { try { if (fs.existsSync(p)) return p; } catch {} }
+  return process.platform === 'win32'
+    ? path.join(__dirname, 'voice_capture.ps1')
+    : '';
+}
+const VOICE_PS1 = findVoiceScript();
+if (!VOICE_PS1 || !fs.existsSync(VOICE_PS1)) {
+  console.log('  ⚠ voice input script not found; 🎤 will fall back to Web Speech');
+}
+
+async function handleVoice(req, res) {
+  if (process.platform !== 'win32') return sendJson(res, 501, { ok: false, error: 'Voice input needs Windows' });
+  if (!VOICE_PS1 || !fs.existsSync(VOICE_PS1)) return sendJson(res, 501, { ok: false, error: 'voice_capture.ps1 not found' });
+  let body = {};
+  try { body = JSON.parse(await readBody(req)); } catch { /* ignore */ }
+  const seconds = Math.max(1, Math.min(10, parseInt(body.seconds, 10) || 4));
+  const outJson = path.join(require('os').tmpdir(), 'joi_voice_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8) + '.json');
+  const child = spawn('powershell', [
+    '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', VOICE_PS1,
+    '-Seconds', String(seconds), '-OutJson', outJson,
+  ], { windowsHide: true });
+  const killTimer = setTimeout(() => { try { child.kill(); } catch {} }, (seconds + 20) * 1000);
+  let stdout = '', stderr = '';
+  child.stdout.on('data', (d) => { stdout += d; });
+  child.stderr.on('data', (d) => { stderr += d; });
+  child.on('error', (err) => {
+    clearTimeout(killTimer);
+    return sendJson(res, 500, { ok: false, error: 'voice: ' + err.message });
+  });
+  child.on('close', (code) => {
+    clearTimeout(killTimer);
+    try {
+      /* Set-Content -Encoding UTF8 writes a BOM — strip it before parsing */
+      const raw = fs.readFileSync(outJson, 'utf8').replace(/^\uFEFF/, '');
+      const result = JSON.parse(raw);
+      fs.unlinkSync(outJson);
+      return sendJson(res, 200, result);
+    } catch {
+      return sendJson(res, 200, { ok: false, error: 'voice capture failed' + (stderr ? ': ' + stderr.slice(0, 200) : '') });
+    }
+  });
+}
 
 async function handleTTS(req, res) {
   let body = {};
@@ -700,11 +778,85 @@ function handleAudioClips(res) {
   });
 }
 
+/* ---------------- /api/delamain (in-game agent, SSE) ----------------
+   Runs the DELAMAIN agent loop (same core as cyber-agent/agent.py) against
+   your local Ollama and streams it back in the app's SSE shape so the face
+   UI can reuse its whole pipeline — thinking bubble, tool-call events,
+   streaming reply, lip-synced speech, Pause/Stop.
+     data: {tool:{name,args,ok,result|error}}            per tool executed
+     data: {choices:[{delta:{content}}]}                 the reply, streamed
+     data: [DONE]
+   body: { goal, model, backend: 'game'|'sim' } */
+async function handleDelamain(req, res) {
+  let body = {};
+  try { body = JSON.parse(await readBody(req)); } catch { return sendJson(res, 400, { error: 'Invalid JSON body' }); }
+  const model = String(body.model || '').trim();
+  const goal = String(body.goal || '').trim();
+  if (!goal) return sendJson(res, 400, { error: 'No goal to execute.' });
+  if (!model) return sendJson(res, 400, { error: 'No model selected. Pick a model in Settings first.' });
+
+  const backend = body.backend === 'game' ? new delamain.GameBridge(DELAMAIN_IPC) : new delamain.SimBackend();
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  const ctl = new AbortController();
+  res.on('close', () => { try { ctl.abort(); } catch {} });
+
+  try {
+    const { answer } = await delamain.agentTurn(model, backend, goal, {
+      signal: ctl.signal,
+      onTool: (fn, args, result) => {
+        if (res.destroyed || res.writableEnded) return;
+        res.write(`data: ${JSON.stringify({ tool: { name: fn, args, ok: !!result.ok, result: result.result, error: result.error } })}\n\n`);
+      },
+    });
+    if (res.destroyed || res.writableEnded) return;
+    /* stream the final reply in small chunks so the client renders + starts
+       speaking almost immediately (same feel as the streaming /api/chat) */
+    const chunks = String(answer || '').match(/[\s\S]{1,48}/g) || [];
+    for (const c of chunks) {
+      if (res.destroyed || res.writableEnded) break;
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: c } }] })}\n\n`);
+      await new Promise((r) => setTimeout(r, 16));
+    }
+    if (!res.destroyed && !res.writableEnded) res.write('data: [DONE]\n\n');
+  } catch (err) {
+    if (res.destroyed || res.writableEnded) return;
+    const raw = String(err.message || err);
+    const stopped = /abort/i.test(raw);
+    const msg = stopped
+      ? 'Stopped.'
+      : (err.name === 'TimeoutError'
+          ? 'DELAMAIN took too long to respond. The first reply can be slow while a big model cold-loads — try again now that it is warm, or pick a smaller model.'
+          : (raw.includes('Ollama error') || /ECONNREFUSED|fetch failed/i.test(raw)
+              ? 'Could not reach Ollama at 127.0.0.1:11434. Is it running? (ollama serve)'
+              : 'DELAMAIN error: ' + raw));
+    res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
+  }
+  try { res.end(); } catch {}
+}
+
+/* ---------------- /api/delamain/state (game-link indicator) ----------------
+   Reports whether the DELAMAIN CET mod bridge is live (fresh ipc/state.json)
+   plus the latest snapshot — the client shows GAME LIVE / GAME OFFLINE. */
+async function handleDelamainState(res) {
+  const bridge = new delamain.GameBridge(DELAMAIN_IPC);
+  const connected = bridge.connected();
+  const state = connected ? bridge.readState() : null;
+  sendJson(res, 200, { connected, state, ipc: DELAMAIN_IPC });
+}
+
 /* ---------------- server ---------------- */
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   if (req.method === 'POST' && url.pathname === '/api/chat') return handleChat(req, res);
+  if (req.method === 'POST' && url.pathname === '/api/delamain') return handleDelamain(req, res);
+  if (req.method === 'GET' && url.pathname === '/api/delamain/state') return handleDelamainState(res);
   if (req.method === 'GET' && url.pathname === '/api/models') return handleModels(res);
   if (req.method === 'GET' && url.pathname === '/api/memory') return handleMemoryGet(res);
   if (req.method === 'POST' && url.pathname === '/api/memory') return handleMemorySet(req, res);
@@ -713,6 +865,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/yt-meta') return handleYtMeta(res, url.searchParams.get('v'));
   if (req.method === 'GET' && url.pathname === '/api/latest-release') return handleLatestRelease(res);
   if (req.method === 'POST' && url.pathname === '/api/tts') return handleTTS(req, res);
+  if (req.method === 'POST' && url.pathname === '/api/voice') return handleVoice(req, res);
   if (req.method === 'POST' && url.pathname === '/api/server/stop') return handleServerStop(res);
   if (req.method === 'POST' && url.pathname === '/api/server/restart') return handleServerRestart(res);
   if (req.method === 'POST' && url.pathname === '/api/server/start') return handleServerStart(res);

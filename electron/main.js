@@ -62,6 +62,13 @@ function createWindow() {
      localhost resolves to the same 127.0.0.1 server. */
   win.loadURL('http://localhost:4173/');
 
+  /* YouTube also refuses embeds when the User-Agent reveals a non-browser
+     ("Electron/x.y" in the UA string → "Video unavailable"). Spoof a
+     current Chrome UA for the whole window so embeds and yt-meta work. */
+  win.webContents.setUserAgent(
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+  );
+
   /* open external links in the default browser, not inside her */
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http://') || url.startsWith('https://')) shell.openExternal(url);

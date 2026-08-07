@@ -3,6 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>
+  /* YouTube refuses embeds when the page origin is a bare IP (127.0.0.1)
+     — it needs a hostname it can trust. The EXE already loads localhost;
+     this makes the browser/Preview load localhost too (same server). */
+  if (location.hostname === '127.0.0.1' || location.hostname === '0.0.0.0') {
+    location.replace('http://localhost:' + (location.port || '4173') + location.pathname + location.search);
+  }
+</script>
 <title>JOI · Holographic Companion</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -20,7 +28,7 @@
 <div class="app chat-app">
   <header class="topbar">
     <div class="brand">
-      <span class="brand-name">JOI</span>
+      <span class="brand-name" id="brand-name">JOI</span>
       <span class="brand-sub" id="brand-sub">holographic companion</span>
     </div>
     <div class="telemetry">
@@ -59,6 +67,16 @@
         <button class="chip" data-expr="playful">Playful</button>
         <button class="chip" data-expr="focused">Focused</button>
         <button class="chip" data-expr="surprised">Surprised</button>
+      </div>
+      <div class="persona-row">
+        <button type="button" class="chip active" id="btn-persona-joi" title="JOI — your holographic companion">✦ JOI</button>
+        <button type="button" class="chip" id="btn-persona-delamain" title="DELAMAIN — in-game agent that controls Cyberpunk 2077 through Ollama">◈ DELAMAIN</button>
+      </div>
+      <div class="delamain-status" id="delamain-status" style="display:none">
+        <span class="dl-dot" id="dl-dot"></span>
+        <span class="dl-label">GAME LINK</span>
+        <b id="dl-link">…</b>
+        <button type="button" class="btn small dl-refresh" id="dl-refresh" title="Re-check the game bridge">⟳</button>
       </div>
       <div class="stage-tools">
         <button class="btn small" id="btn-calibrate" title="Align her features to the render">◎ Align features</button>
@@ -155,6 +173,21 @@
       <p class="note">Studio-quality neural voices via Microsoft Edge (free). If TTS is not set up yet, run <code>npm run setup:tts</code> in the joi-companion folder.</p>
     </div>
 
+    <div class="panel" id="panel-delamain">
+      <h3 class="group-title">DELAMAIN <span class="tag">in-game agent</span></h3>
+      <label class="field-label">Game backend</label>
+      <select id="set-delamain-backend" class="select">
+        <option value="sim">Simulated (no game)</option>
+        <option value="game">Live game (CET mod bridge)</option>
+      </select>
+      <label class="field-label">Delamain voice</label>
+      <select id="set-delamain-voice" class="select"></select>
+      <p class="note">DELAMAIN is an Ollama tool-calling agent that controls Cyberpunk 2077 through the CET mod bridge
+        (<code>cyber-agent/ipc/commands.json</code>). Launch Cyberpunk with the DELAMAIN mod loaded, then set the backend
+        to <b>Live game</b>. He shares the same holographic face — switch personas with the chips under the portrait.
+        Try “give me 100k eddies and set the time to 3am”.</p>
+    </div>
+
     <div class="panel" id="panel-desktop" style="display:none">
       <h3 class="group-title">Desktop app <span class="tag">EXE</span></h3>
       <label class="switch-row">
@@ -207,6 +240,7 @@
 
 <script src="js/face.js"></script>
 <script src="js/living.js"></script>
+<script src="js/delamain-holo.js"></script>
 <script src="js/quotes.js"></script>
 <script src="js/memory.js"></script>
 <script src="js/app.js"></script>

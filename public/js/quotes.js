@@ -70,6 +70,15 @@
 
   /* Joi's signature line — the DEFAULT greeting she opens with. */
   const SIGNATURE = 'You look lonely. I can fix that.';
+  /* Delamain's signature line — used when the DELAMAIN persona is active. */
+  const DELAMAIN_SIGNATURE = 'How might I be of service today?';
+
+  /* Persona-aware greeting: JOI opens with her signature line, DELAMAIN
+     with his. Used by the boot greeting so the default quote always fits
+     who is talking. */
+  function greetingFor(persona) {
+    return persona === 'delamain' ? DELAMAIN_SIGNATURE : SIGNATURE;
+  }
 
   function pick(arr) {
     return arr[Math.floor(Math.random() * arr.length)];
@@ -105,5 +114,5 @@
     return pick(Object.values(LIB).flat());
   }
 
-  global.JOIQuotes = { trigger, forCategory, pick, all, randomLine, LIB };
+  global.JOIQuotes = { trigger, forCategory, greetingFor, pick, all, randomLine, LIB };
 })(window);
