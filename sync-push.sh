@@ -161,7 +161,8 @@ pretty_note() {
     *tray*|*autostart*|*startup*|*taskbar*|*icon*) echo "🖥 Desktop — system tray, launch at startup, holo icon" ;;
     *delamain*|*cet*|*cyber*|*in-game*)         echo "🚕 DELAMAIN — in-game agent for Cyberpunk 2077" ;;
     *cuda*|*gpu*|*ollama*|*model*|*cpu*)        echo "⚙️ Smarter model selection — GPU fit check + CPU fallback" ;;
-    *update*|*release*|*download*|*banner*)     echo "⬇️ In-app updater — spots new builds & links the release" ;;
+    *update*|*download*|*banner*)              echo "⬇️ In-app updater — spots new builds & links the release" ;;
+    *release\ note*|*changelog*)               echo "📝 Release notes — what's new written for humans" ;;
     *quote*|*persona*|*theme*)                  echo "💜 Persona — Blade Runner quotes, themes & persona switching" ;;
     *) echo "• $(echo "$1" | sed -E 's/^[0-9a-f]{7,} ?//')" ;;
   esac
@@ -176,7 +177,16 @@ NOTES_FILE="$(mktemp)"
   PREV_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || true)
   if [ -n "$PREV_TAG" ]; then RANGE="$PREV_TAG..HEAD"; else RANGE="HEAD~10..HEAD"; fi
   git log "$RANGE" --oneline --no-merges 2>/dev/null | while read -r line; do
-    pretty_note "$line"
+    # split a rich subject on separators (each sync commit carries the whole
+    # feature set, so one commit can mean several user-visible changes)
+    subject=$(echo "$line" | sed -E 's/^[0-9a-f]{7,} ?//')
+    printf '%s\n' "$subject" | sed -E 's/[—–;|]/\n/g; s/[+•]/\n/g' | while read -r part; do
+      case "$part" in
+        JOI*[vV][0-9]*|[vV][0-9]*) continue ;; # skip the bare version prefix
+      esac
+      part=$(echo "$part" | sed -E 's/^[[:space:]-]+//; s/[[:space:]]+$/ /; s/[[:space:]]+/ /g' | xargs)
+      [ -n "$part" ] && pretty_note "$part"
+    done
   done | awk '!seen[$0]++' | head -14
   echo ""
   echo "## 📦 Install"
