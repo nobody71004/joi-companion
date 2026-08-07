@@ -290,7 +290,54 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     el.appendChild(b);
     log.appendChild(el);
     log.scrollTop = log.scrollHeight;
+    scheduleHistoryPush();
     return b;
+  }
+
+  /* ---------------- visible chat persistence ----------------
+     After every exchange the rendered conversation is pushed to the server
+     (debounced), so a rebuild/restart restores her context instead of a
+     blank page. The sync script reads /api/state and can wait for a reply
+     to finish instead of force-killing mid-conversation. */
+  let historyTimer = null;
+  function scheduleHistoryPush() {
+    clearTimeout(historyTimer);
+    historyTimer = setTimeout(pushHistory, 800);
+  }
+  async function pushHistory() {
+    if (!serverUp) return;
+    const msgs = [];
+    for (const el of log.querySelectorAll('.msg')) {
+      let role = null;
+      if (el.classList.contains('user')) role = 'user';
+      else if (el.classList.contains('joi') || el.classList.contains('delamain')) role = 'assistant';
+      if (!role) continue;
+      const bubble = el.querySelector('.bubble');
+      const text = (bubble ? bubble.textContent : '').trim();
+      if (!text) continue;
+      msgs.push({ role, text: text.slice(0, 2000) });
+    }
+    if (!msgs.length) return;
+    try {
+      await fetch('/api/history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(msgs),
+      });
+    } catch { /* server restarting — fine, next push retries */ }
+  }
+  async function restoreHistory() {
+    try {
+      const r = await fetch('/api/history', { cache: 'no-store' });
+      const arr = await r.json();
+      if (!Array.isArray(arr) || !arr.length) return false;
+      for (const m of arr) {
+        const kind = m.role === 'user' ? 'user' : 'joi';
+        addMsg(kind, mdInline(mdEscape(m.text)), m.role === 'user' ? 'you' : 'earlier');
+      }
+      log.scrollTop = log.scrollHeight;
+      return true;
+    } catch { /* first boot */ return false; }
   }
 
   function addThinking() {
@@ -884,6 +931,7 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
       }
       currentAbort = null;
       history.push({ role: 'assistant', text: acc });
+      scheduleHistoryPush(); /* final text — capture it before anything else changes */
       setCtx(promptEst + genTokens);
       stopGenTimer(genTokens);
       /* a clean reply proves this model runs — remember it as a safe pick */
@@ -906,6 +954,7 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
           currentBubble.innerHTML = mdRender(currentAcc) +
             '<span class="em" style="margin-top:6px">⏹ stopped — partial reply kept</span>';
           history.push({ role: 'assistant', text: currentAcc });
+          scheduleHistoryPush();
         }
         setExpr('neutral');
         $('#tl-signal').textContent = 'STABLE';
@@ -1050,6 +1099,7 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
       if (currentBubble) currentBubble.innerHTML = mdRender(acc);
       currentAbort = null;
       history.push({ role: 'assistant', text: acc });
+      scheduleHistoryPush(); /* final text — capture it before anything else changes */
       setCtx(promptEst + genTokens);
       stopGenTimer(genTokens);
       setExpr('happy');
@@ -1064,6 +1114,7 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
           currentBubble.innerHTML = mdRender(currentAcc) +
             '<span class="em" style="margin-top:6px">⏹ stopped — partial reply kept</span>';
           history.push({ role: 'assistant', text: currentAcc });
+          scheduleHistoryPush();
         }
         setExpr('neutral');
         return;
@@ -1523,6 +1574,8 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     const up = await pingServer();
     if (!up) { showOffline(); return; }
     serverUp = true;
+    /* bring back the conversation from the last session before greeting */
+    const hadHistory = await restoreHistory();
     initEngine();
     ctxLimitEl.textContent = fmtTok(ctxLimit);
     /* restore the persona from the last session (JOI ⇄ DELAMAIN) */
@@ -1563,9 +1616,11 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     keyInput.value = prefs.key;
     await refreshModels();
     /* warm greeting with a Blade Runner quote — quote, pronouns and name
-       all follow the persona */
+       all follow the persona. Skipped when the previous conversation was
+       restored (no duplicate greetings on reload). */
     const name = JOIMemory.getName();
     const isDel = prefs.persona === 'delamain';
+    if (hadHistory) return;
     setTimeout(() => {
       const q = JOIQuotes.greetingFor(prefs.persona);
       addMsg('joi quote', `<span class="em">${isDel ? 'Delamain · Night City' : 'Joi · Blade Runner'}</span>${mdInline(mdEscape(q))}`, isDel ? 'he remembers you' : 'she remembers you');

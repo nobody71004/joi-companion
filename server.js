@@ -640,6 +640,48 @@ const DATA_DIR = path.join(packagedBase(), 'data');
 const MEMORY_FILE = path.join(DATA_DIR, 'memory.json');
 const MAX_MEMORIES = 400;
 
+/* How many streaming replies are in flight right now. The sync/push script
+   reads this via /api/state so it never force-kills the app mid-conversation
+   (the reply + chat state would be lost). */
+let activeStreams = 0;
+function trackStream(res) {
+  activeStreams++;
+  let done = false;
+  /* finish (handed to OS) and close (connection torn down) can BOTH fire for
+     one response — guard so the counter is only ever decremented once, or the
+     sync script could see a false "idle" (force-kill mid-reply) or a stuck
+     "busy" (abort every rebuild). */
+  const off = () => {
+    if (done) return;
+    done = true;
+    activeStreams = Math.max(0, activeStreams - 1);
+  };
+  res.on('close', off);
+  res.on('finish', off);
+}
+
+/* The visible conversation, persisted server-side so a restart/rebuild
+   restores her context. The client pushes this after every exchange
+   (debounced) and pulls it back on boot. Private — lives next to the
+   brain in data/, never committed. */
+const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
+const MAX_HISTORY = 60;
+let savedHistory = [];
+function loadHistory() {
+  try {
+    const d = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
+    if (Array.isArray(d)) savedHistory = d.filter((m) => m && (m.role === 'user' || m.role === 'assistant')).slice(-MAX_HISTORY);
+  } catch { /* first run */ }
+}
+function saveHistory() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(savedHistory.slice(-MAX_HISTORY), null, 2));
+  } catch (err) {
+    console.error('  ✖ could not write history file:', err.message);
+  }
+}
+
 let brain = { name: '', facts: [], memories: [] };
 function loadBrain() {
   try {
@@ -715,6 +757,41 @@ function handleMemoryClear(res) {
 }
 
 loadBrain();
+loadHistory();
+
+/* ---------------- /api/state (used by the sync script) ----------------
+   Lets the sync/push pipeline ask "is she mid-reply?" before it rebuilds
+   the EXE, so it can wait or abort instead of force-killing a live reply.
+   Also exposes the version so the script can show what's running. */
+function currentVersion() {
+  try { return require('./package.json').version || '0.0.0'; } catch { return '0.0.0'; }
+}
+function handleState(res) {
+  sendJson(res, 200, { up: true, activeStreams, version: currentVersion() });
+}
+
+/* ---------------- /api/history (visible chat, persisted) ----------------
+   The client pushes the rendered conversation here after every exchange
+   (debounced) and pulls it back on boot, so a rebuild/restart restores her
+   context instead of starting from a blank page. */
+function handleHistoryGet(res) {
+  sendJson(res, 200, savedHistory);
+}
+function handleHistorySet(req, res) {
+  readBody(req).then((body) => {
+    try {
+      const arr = JSON.parse(body);
+      if (!Array.isArray(arr)) throw new Error('not an array');
+      savedHistory = arr
+        .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.text === 'string' && m.text.trim())
+        .slice(-MAX_HISTORY);
+      saveHistory();
+      sendJson(res, 200, { ok: true, count: savedHistory.length });
+    } catch {
+      sendJson(res, 400, { error: 'Invalid history payload' });
+    }
+  }).catch(() => sendJson(res, 400, { error: 'Bad request' }));
+}
 
 /* ---------------- server control (Start / Stop / Restart from the app) ----------------
    Stop   → replies, then shuts the HTTP server down gracefully.
@@ -858,6 +935,9 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url.pathname === '/api/delamain') return handleDelamain(req, res);
   if (req.method === 'GET' && url.pathname === '/api/delamain/state') return handleDelamainState(res);
   if (req.method === 'GET' && url.pathname === '/api/models') return handleModels(res);
+  if (req.method === 'GET' && url.pathname === '/api/state') return handleState(res);
+  if (req.method === 'GET' && url.pathname === '/api/history') return handleHistoryGet(res);
+  if (req.method === 'POST' && url.pathname === '/api/history') return handleHistorySet(req, res);
   if (req.method === 'GET' && url.pathname === '/api/memory') return handleMemoryGet(res);
   if (req.method === 'POST' && url.pathname === '/api/memory') return handleMemorySet(req, res);
   if (req.method === 'POST' && url.pathname === '/api/memory/clear') return handleMemoryClear(res);
@@ -871,9 +951,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url.pathname === '/api/server/start') return handleServerStart(res);
   if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true, port: PORT });
   if (req.method === 'GET' && url.pathname === '/api/version') {
-    let version = '0.0.0';
-    try { version = require('./package.json').version || version; } catch {}
-    return sendJson(res, 200, { version });
+    return sendJson(res, 200, { version: currentVersion() });
   }
   if (req.method === 'GET') return serveStatic(req, res, url.pathname);
   return sendJson(res, 405, { error: 'Method not allowed' });
