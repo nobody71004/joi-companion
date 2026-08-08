@@ -392,6 +392,27 @@ input[type="range"] { width: 100%; accent-color: #ff9ecb; margin-top: 6px; }
   border-radius: 8px;
 }
 
+/* live VRAM meter in the Settings brain panel */
+.vram-box { margin: 10px 0 4px; }
+.vram-track {
+  height: 6px; border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden; margin-bottom: 6px;
+}
+.vram-bar {
+  height: 100%; width: 0;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #9b6dff, #ff6dd7);
+  box-shadow: 0 0 10px rgba(255, 109, 215, 0.5);
+  transition: width 0.5s ease;
+}
+.vram-bar.hot {
+  background: linear-gradient(90deg, #ff9b6d, #ff3d6d);
+  box-shadow: 0 0 10px rgba(255, 61, 109, 0.6);
+}
+.vram-note { color: var(--ink-dim); }
+.vram-note b { color: var(--pink); font-family: 'JetBrains Mono', monospace; }
+
 /* ============ chat tabs (Chat / Media) ============ */
 .chat-tabs { display: flex; gap: 6px; padding: 10px 12px 0; }
 .tab {

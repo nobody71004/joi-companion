@@ -1,6 +1,6 @@
 {
   "name": "joi-companion",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "JOI — holographic AI companion with a speaking face, voice, coding intelligence, and a Blade Runner soul.",
   "main": "electron/main.js",
   "scripts": {

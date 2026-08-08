@@ -114,16 +114,21 @@ async function ollamaModels() {
 }
 
 function pickDefaultModel(models) {
-  for (const p of ['3b', '7b', '9b', '13b', 'qwen', 'llama3']) {
+  /* qwen3 (4b/8b) first — native tool calling; then the classic sizes */
+  for (const p of ['qwen3', '4b', '3b', '7b', '9b', '13b', 'qwen', 'llama3']) {
     for (const m of models) if (m.toLowerCase().includes(p)) return m;
   }
   return models[0] || null;
 }
 
 async function ollamaChat(model, messages, tools, signal) {
-  const body = { model, messages, stream: false, options: { temperature: 0.6 } };
+  /* Use Ollama's NATIVE /api/chat — the only endpoint that honors
+     options.num_ctx (the OpenAI-compat /v1/chat/completions ignores it and
+     loads the full baked-in context, ~6 GB VRAM for qwen3:4b → OOM crash).
+     num_ctx: 8192 keeps him small and stable on the 8 GB laptop GPU. */
+  const body = { model, messages, stream: false, options: { temperature: 0.6, num_ctx: 8192 } };
   if (tools) body.tools = tools;
-  const res = await fetch(OLLAMA + '/v1/chat/completions', {
+  const res = await fetch(OLLAMA + '/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -134,7 +139,10 @@ async function ollamaChat(model, messages, tools, signal) {
     try { const j = await res.json(); detail = (j.error && (j.error.message || j.error)) || ''; } catch {}
     throw new Error('Ollama error (' + res.status + '): ' + detail);
   }
-  return res.json();
+  const j = await res.json();
+  /* native response is { message, done } — normalize into the OpenAI shape
+     the tool loop below expects ({ choices: [{ message }] }) */
+  return j && j.message ? { choices: [{ message: j.message }] } : j;
 }
 
 /* ---------------- tool-call extraction (weak-model fallback) ---------------- */

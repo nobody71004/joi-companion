@@ -1213,8 +1213,8 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   /* ---------------- settings ---------------- */
   const drawer = $('#settings-drawer');
   const backdrop = $('#drawer-backdrop');
-  function openDrawer() { drawer.classList.add('open'); backdrop.classList.add('open'); }
-  function closeDrawer() { drawer.classList.remove('open'); backdrop.classList.remove('open'); }
+  function openDrawer() { drawer.classList.add('open'); backdrop.classList.add('open'); startVramMeter(); }
+  function closeDrawer() { drawer.classList.remove('open'); backdrop.classList.remove('open'); stopVramMeter(); }
   $('#btn-settings').addEventListener('click', openDrawer);
   $('#btn-drawer-close').addEventListener('click', closeDrawer);
   backdrop.addEventListener('click', closeDrawer);
@@ -1264,6 +1264,49 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     return `GPU: ${gpu.name} · ${gpu.freeGb} GB free of ${gpu.totalGb} GB.`;
   }
 
+  /* ---- live VRAM meter (Settings) — polls /api/gpu while the drawer is open ---- */
+  let vramTimer = null;
+  async function refreshVram() {
+    const box = $('#vram-box');
+    const el = $('#vram-readout');
+    const bar = $('#vram-bar');
+    if (!box || !el || !bar) return;
+    try {
+      const r = await fetch('/api/gpu');
+      const g = await r.json();
+      if (!g.hasGpu) { box.style.display = 'none'; return; }
+      box.style.display = '';
+      const used = g.usedByModelGb || 0;
+      const free = g.freeGb || 0;
+      const pct = g.totalGb ? Math.min(100, Math.round((used / g.totalGb) * 100)) : 0;
+      bar.style.width = pct + '%';
+      bar.classList.toggle('hot', used > 0 && free < 1.5);
+      el.innerHTML = used > 0
+        ? `VRAM: <b>${used} GB</b> by her model · ${free} GB free of ${g.totalGb} GB`
+        : `VRAM: <b>0 GB</b> by her model · ${free} GB free of ${g.totalGb} GB — cold, first reply loads her`;
+    } catch { /* server busy — keep last reading */ }
+  }
+  function startVramMeter() { stopVramMeter(); refreshVram(); vramTimer = setInterval(refreshVram, 2000); }
+  function stopVramMeter() { if (vramTimer) { clearInterval(vramTimer); vramTimer = null; } }
+
+  /* ---- boot-time warm-up: preload her model in the background so the
+     first reply doesn't cold-load. Best-effort, fire-and-forget. ---- */
+  async function warmUpModel() {
+    if (prefs.provider !== 'ollama' || !prefs.model) return;
+    try {
+      await fetch('/api/warmup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: prefs.provider,
+          model: prefs.model,
+          base: prefs.base,
+          forceCPU: !!prefs.forceCPU,
+        }),
+      });
+    } catch { /* warm-up is best-effort — never break boot */ }
+  }
+
   async function refreshModels() {
     if (prefs.provider === 'ollama') {
       try {
@@ -1282,21 +1325,42 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
         if (!d.models.some((m) => m.name === prefs.model)) prefs.model = d.models[0].name;
 
         /* AUTO-SELECT A SAFE MODEL — if the current pick is a crash risk on
-           this GPU (bigger than the free VRAM) and a fitting model exists,
-           switch to the best fitting one and tell her why. Skipped while
-           CPU mode is on, where big models are crash-proof. */
+           this GPU (bigger than the free VRAM), prefer a small proven model
+           (the 3B class: qwen2.5-coder:3b and friends — fast + reliable on
+           an 8 GB laptop GPU) over a bigger-but-fitting one. If nothing
+           small fits at all, auto-enable CPU mode so the big pick still
+           runs crash-proof instead of just warning. */
         const fitting = d.models.filter((m) => !risky(m));
+        const smallPick = (list) =>
+          /* smarter tool-calling first: qwen3:4b/8b (or its hf.co/
+             Qwen3-4B-GGUF variant) does reliable native function calls;
+             qwen2.5-coder:3b is the proven fallback */
+          list.find((m) => /qwen3[-:]4b|qwen3[-:]8b/i.test(m.name)) ||
+          list.find((m) => m.name.includes('qwen2.5-coder:3b')) ||
+          list.find((m) => /[:.-]3b$/i.test(m.name)) ||
+          list.filter((m) => m.sizeGb && m.sizeGb <= 2.5).slice().sort((a, b) => (a.sizeGb || 0) - (b.sizeGb || 0))[0] ||
+          null;
         const curRisky = !prefs.forceCPU && !!d.models.find((m) => m.name === prefs.model && risky(m));
-        if (curRisky && fitting.length) {
+        if (curRisky) {
           const from = prefs.model;
           const knownGood = (prefs.lastGoodModel && fitting.some((m) => m.name === prefs.lastGoodModel))
             ? prefs.lastGoodModel
             : null;
-          /* best = the model she has proven she can run, else the largest
-             that fits (most capable without crashing) */
-          prefs.model = knownGood || fitting.slice().sort((a, b) => (b.sizeGb || 0) - (a.sizeGb || 0))[0].name;
-          savePrefs();
-          addMsg('joi', `<span class="em">system</span>${mdInline(mdEscape(`Switched you to ${prefs.model} — ${from} is bigger than your GPU's VRAM and would crash. She runs best on a model that fits (no ⚠ flag).`))}`, 'auto-recovery');
+          if (fitting.length) {
+            /* best = the small proven 3B pick first (fast + stable on this
+               laptop GPU), else a model she has proven she can run, else
+               the smallest that fits — never the largest */
+            const sp = smallPick(fitting);
+            prefs.model = (sp && sp.name) || knownGood || fitting.slice().sort((a, b) => (a.sizeGb || 0) - (b.sizeGb || 0))[0].name;
+            savePrefs();
+            addMsg('joi', `<span class="em">system</span>${mdInline(mdEscape(`Switched you to ${prefs.model} — ${from} is bigger than your GPU's VRAM and would crash. She runs best on a small model that fits (no ⚠ flag).`))}`, 'auto-recovery');
+          } else {
+            /* nothing fits the VRAM → CPU mode keeps the big pick crash-proof */
+            prefs.forceCPU = true;
+            if (typeof cpuToggle !== 'undefined' && cpuToggle) cpuToggle.checked = true;
+            savePrefs();
+            addMsg('joi', `<span class="em">system</span>${mdInline(mdEscape(`Nothing installed fits your VRAM, so I switched on CPU mode — ${from} will run crash-proof (slower, but stable).`))}`, 'auto-recovery');
+          }
         }
 
         modelSel.value = prefs.model;
@@ -1328,6 +1392,7 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   }
   modelSel.addEventListener('change', () => {
     prefs.model = modelSel.value; savePrefs();
+    warmUpModel(); /* preload the newly picked model too */
     /* remember a model the user chose that isn't a crash risk, so future
        auto-switches can come back to it */
     if ((window.__fitByModel || {})[modelSel.value] !== false) {
@@ -1615,6 +1680,9 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
     baseInput.value = prefs.base || '';
     keyInput.value = prefs.key;
     await refreshModels();
+    /* warm-up: preload her model in the background so the first reply is
+       instant instead of cold-loading (never blocks boot) */
+    warmUpModel();
     /* warm greeting with a Blade Runner quote — quote, pronouns and name
        all follow the persona. Skipped when the previous conversation was
        restored (no duplicate greetings on reload). */

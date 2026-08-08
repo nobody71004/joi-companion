@@ -50,7 +50,9 @@ echo "    ✓ all JS clean"
 # Run before the version bump so an aborted run leaves nothing changed.
 BUSY=1
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-  STATE=$(curl -s --max-time 2 "http://localhost:${PORT:-4173}/api/state" 2>/dev/null) || STATE=""
+  # Pin the port (4173) — never inherit a stray PORT from the shell env,
+  # or the check could hit a different process and falsely abort the run.
+  STATE=$(curl -s --max-time 2 "http://localhost:4173/api/state" 2>/dev/null) || STATE=""
   if [ -z "$STATE" ]; then
     BUSY=0; break   # server not reachable → app not running → safe to rebuild
   fi
@@ -109,6 +111,18 @@ fi
 EXE_MB=$(du -m "$SRC/dist/JOI-Companion.exe" | awk '{print $1}')
 echo "    ✓ EXE rebuilt ($EXE_MB MB)"
 
+# ---- 4.5. smoke-test the fresh build (never ship a broken EXE) --
+# Boots the new EXE, verifies version/state/health, and seeds+restores
+# chat history across a restart. Fails the whole release if anything
+# breaks — a broken build never reaches GitHub.
+echo "  · smoke-testing the fresh build (takes ~1-2 min)…"
+if ! bash "$SRC/smoke-test.sh"; then
+  echo "  ✖ SMOKE TEST FAILED — release aborted. Fix the failure and re-run."
+  echo "    details: tail -30 $SRC/.smoke-test.log"
+  exit 1
+fi
+echo "    ✓ smoke test passed"
+
 # ---- 5. sync source into the clean repo (no data/, venv, modules)
 echo "  · syncing source…"
 cp "$SRC/server.js" "$SRC/delamain.js" "$SRC/package.json" "$SRC/Start-JOI.bat" "$SRC/Stop-JOI.bat" "$DST/"
@@ -118,7 +132,7 @@ cp -r "$SRC/public/." "$DST/public/"
 mkdir -p "$DST/build"
 cp "$SRC/build/icon.ico" "$SRC/build/make_icon.py" "$DST/build/"
 cp "$SRC/dist/JOI-Companion.exe" "$DST/dist/"
-cp "$SRC/sync-push.sh" "$SRC/sync-push.bat" "$DST/" 2>/dev/null || true
+cp "$SRC/sync-push.sh" "$SRC/sync-push.bat" "$SRC/smoke-test.sh" "$DST/" 2>/dev/null || true
 echo "    ✓ synced (brain data/ deliberately excluded)"
 
 # ---- 6. commit + push --------------------------------------
@@ -161,6 +175,7 @@ pretty_note() {
     *tray*|*autostart*|*startup*|*taskbar*|*icon*) echo "🖥 Desktop — system tray, launch at startup, holo icon" ;;
     *delamain*|*cet*|*cyber*|*in-game*)         echo "🚕 DELAMAIN — in-game agent for Cyberpunk 2077" ;;
     *cuda*|*gpu*|*ollama*|*model*|*cpu*)        echo "⚙️ Smarter model selection — GPU fit check + CPU fallback" ;;
+    *vram*|*warm*|*preload*)                    echo "⚡ Instant first reply — her model preloads at boot, live VRAM meter in Settings" ;;
     *update*|*download*|*banner*)              echo "⬇️ In-app updater — spots new builds & links the release" ;;
     *release\ note*|*changelog*)               echo "📝 Release notes — what's new written for humans" ;;
     *quote*|*persona*|*theme*)                  echo "💜 Persona — Blade Runner quotes, themes & persona switching" ;;

@@ -193,6 +193,98 @@ async function handleModels(res) {
   }
 }
 
+/* ---------------- /api/gpu (live VRAM for the Settings meter) ----------------
+   nvidia-smi gives free/total; for "how much is HER model using" we ask
+   Ollama's /api/ps, which reports size_vram — the exact bytes of each loaded
+   model resident in VRAM. That's authoritative AND works on WDDM drivers
+   where nvidia-smi per-process memory shows [N/A]. Short 2s cache — the
+   Settings panel polls this every couple of seconds while the drawer is open. */
+let gpuLiveCache = { at: 0, info: null };
+async function detectGPULive() {
+  if (Date.now() - gpuLiveCache.at < 2000 && gpuLiveCache.info) return gpuLiveCache.info;
+  const info = Object.assign({ usedByModelGb: 0, loadedModels: [] }, detectGPU());
+  try {
+    const r = await fetch('http://localhost:11434/api/ps', { signal: AbortSignal.timeout(2000) });
+    if (r.ok) {
+      const d = await r.json();
+      info.loadedModels = (d.models || []).map((m) => ({
+        name: m.name,
+        vramGb: +((m.size_vram || 0) / (1024 * 1024 * 1024)).toFixed(2),
+        totalGb: +((m.size || 0) / (1024 * 1024 * 1024)).toFixed(2),
+      }));
+      info.usedByModelGb = +(info.loadedModels.reduce((s, m) => s + (m.vramGb || 0), 0)).toFixed(2);
+    }
+  } catch { /* Ollama not running → no model can be loaded */ }
+  gpuLiveCache = { at: Date.now(), info };
+  return info;
+}
+async function handleGpu(res) { sendJson(res, 200, await detectGPULive()); }
+
+/* ---------------- /api/warmup (boot-time model preload) ----------------
+   Fires a tiny native-Ollama request in the background so the model is
+   already in VRAM when the first real message lands — no cold-load wait on
+   the first reply. Best-effort by design: never blocks boot, never errors
+   the app, silently no-ops when Ollama isn't running. Uses the SAME native
+   /api/chat endpoint + 8192 context cap as the real chat path, so the warm
+   load matches exactly how she'll run. */
+let warmupState = { at: 0, model: null };
+async function isModelLoaded(base, model) {
+  try {
+    /* resolve the tag to its manifest digest, then check the loaded list —
+       this matches aliases too (qwen3:4b vs its hf.co/Qwen/... origin) */
+    const [tagsR, psR] = await Promise.all([
+      fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(2000) }),
+      fetch(`${base}/api/ps`, { signal: AbortSignal.timeout(2000) }),
+    ]);
+    if (!tagsR.ok || !psR.ok) return false;
+    const tags = await tagsR.json();
+    const ps = await psR.json();
+    const target = (tags.models || []).find((m) => m.name === model);
+    if (!target) return false; // not even installed
+    return (ps.models || []).some((m) => m.digest === target.digest);
+  } catch { return false; }
+}
+
+async function handleWarmup(req, res) {
+  let body = {};
+  try { body = JSON.parse(await readBody(req)); } catch { /* fall through */ }
+  const model = String(body.model || '').trim();
+  const provider = body.provider || 'ollama';
+  const forceCPU = !!body.forceCPU;
+  if (provider !== 'ollama' || !model) {
+    return sendJson(res, 200, { warming: false, reason: 'not-ollama' });
+  }
+  /* dedupe: don't re-warm the same model more than once per 10 minutes */
+  if (warmupState.model === model && Date.now() - warmupState.at < 10 * 60 * 1000) {
+    return sendJson(res, 200, { warming: false, reason: 'already-warm', model });
+  }
+  const base = String(body.base || PRESETS.ollama.base || '')
+    .replace(/\/+$/, '')
+    .replace(/\/v1\/?$/, '');
+  if (!base) return sendJson(res, 200, { warming: false, reason: 'no-base' });
+  if (await isModelLoaded(base, model)) {
+    return sendJson(res, 200, { warming: false, reason: 'loaded', model });
+  }
+  /* fire-and-forget: a 1-token request with a long keep-alive pulls the
+     weights into VRAM at the same capped context the chat path uses. */
+  warmupState = { at: Date.now(), model };
+  const options = { num_ctx: 8192, num_predict: 1 };
+  if (forceCPU) options.num_gpu = 0;
+  fetch(`${base}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: 'ping' }],
+      stream: false,
+      keep_alive: 1800, // keep her warm for 30 minutes
+      options,
+    }),
+    signal: AbortSignal.timeout(120000),
+  }).catch(() => { /* warm-up is best-effort */ });
+  return sendJson(res, 200, { warming: true, model });
+}
+
 /* ---------------- /api/yt-meta (YouTube link unfurl for media cards) ----------------
    No API key needed — YouTube's public oEmbed endpoint returns the title and
    author for any watch/short link. We keep the last results cached so opening
@@ -324,6 +416,44 @@ async function* transformGeminiSSE(upstream) {
   }
 }
 
+/* Ollama native /api/chat streams newline-delimited JSON (not SSE). Convert it
+   into OpenAI-style SSE so the client keeps a single parser: each content chunk
+   becomes choices[0].delta.content, the final done line carries the token
+   counts (usage) and we signal completion with the [DONE] sentinel. */
+async function* transformOllamaNative(upstream) {
+  const reader = upstream.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n')) !== -1) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line) continue;
+        let msg;
+        try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.error) {
+          yield `data: ${JSON.stringify({ error: String(msg.error) })}\n\n`;
+          continue;
+        }
+        const content = msg.message && typeof msg.message.content === 'string' ? msg.message.content : '';
+        if (content) yield `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`;
+        if (msg.done) {
+          /* final line: exact prompt/completion counts for the context meter */
+          yield `data: ${JSON.stringify({ usage: { prompt_tokens: msg.prompt_eval_count || 0, completion_tokens: msg.eval_count || 0 } })}\n\n`;
+          yield 'data: [DONE]\n\n';
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function handleChat(req, res) {
   let body;
   try {
@@ -353,6 +483,29 @@ async function handleChat(req, res) {
   const forceCPU = !!(body.forceCPU && isOllama);
   if (provider === 'gemini') {
     cfg = toGeminiStream(apiKey, model, messages, temperature);
+  } else if (isOllama) {
+    /* Ollama native /api/chat — the ONLY endpoint that honors options.num_ctx.
+       The OpenAI-compat /v1/chat/completions ignores options and loads the
+       model at its full baked-in context (qwen3:4b defaults to 40K → ~6 GB
+       VRAM → OOM crash on this 8 GB laptop). capping to 8192 keeps her at
+       ~2.5-3.9 GB and stable. */
+    const headers = { 'Content-Type': 'application/json' };
+    cfg = toOpenAIStream(headers);
+    /* the OpenAI-compat base usually ends in /v1 — the native endpoint
+       lives at the root, so strip the trailing /v1 before appending */
+    const nativeBase = base.replace(/\/v1\/?$/, '');
+    cfg.url = `${nativeBase}/api/chat`;
+    cfg.bodyObj = {
+      model,
+      messages: messages.map((m) => ({ role: m.role, content: m.text })),
+      stream: true,
+      options: { temperature, num_ctx: 8192 },
+    };
+    /* num_gpu: 0 forces CPU-only inference — the crash-proof mode for
+       models bigger than your VRAM (no CUDA init, no 0xc0000409 crash). */
+    if (forceCPU) cfg.bodyObj.options.num_gpu = 0;
+    cfg.body = JSON.stringify(cfg.bodyObj);
+    cfg.transform = (body) => transformOllamaNative(body);
   } else {
     const headers = { 'Content-Type': 'application/json' };
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
@@ -372,9 +525,6 @@ async function handleChat(req, res) {
       stream: true,
       stream_options: { include_usage: true },
     };
-    /* num_gpu: 0 forces CPU-only inference — the crash-proof mode for
-       models bigger than your VRAM (no CUDA init, no 0xc0000409 crash). */
-    if (forceCPU) cfg.bodyObj.options = { num_gpu: 0 };
     cfg.body = JSON.stringify(cfg.bodyObj);
   }
 
@@ -400,9 +550,10 @@ async function handleChat(req, res) {
   try {
     for (let attempt = 0; attempt < 2; attempt++) {
       if (attempt === 1) {
-        /* second chance: force CPU for ollama only */
+        /* second chance: force CPU for ollama only (keep num_ctx so the
+           retry still runs at the capped context) */
         if (!isOllama) break;
-        cfg.bodyObj = Object.assign({}, cfg.bodyObj, { options: { num_gpu: 0 } });
+        cfg.bodyObj = Object.assign({}, cfg.bodyObj, { options: Object.assign({}, cfg.bodyObj.options, { num_gpu: 0 }) });
         cfg.body = JSON.stringify(cfg.bodyObj);
         usedCPU = true;
       }
@@ -935,6 +1086,8 @@ const server = http.createServer((req, res) => {
   if (req.method === 'POST' && url.pathname === '/api/delamain') return handleDelamain(req, res);
   if (req.method === 'GET' && url.pathname === '/api/delamain/state') return handleDelamainState(res);
   if (req.method === 'GET' && url.pathname === '/api/models') return handleModels(res);
+  if (req.method === 'GET' && url.pathname === '/api/gpu') return handleGpu(res);
+  if (req.method === 'POST' && url.pathname === '/api/warmup') return handleWarmup(req, res);
   if (req.method === 'GET' && url.pathname === '/api/state') return handleState(res);
   if (req.method === 'GET' && url.pathname === '/api/history') return handleHistoryGet(res);
   if (req.method === 'POST' && url.pathname === '/api/history') return handleHistorySet(req, res);
