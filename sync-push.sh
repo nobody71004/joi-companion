@@ -167,7 +167,12 @@ git push origin "$TAG" 2>&1 | tail -1
 # user-visible release notes — summarize what changed for HER instead of
 # raw auto-generated commit notes
 pretty_note() {
-  case "$1" in
+  # bash case is case-sensitive, so match against the lowercased subject
+  # (VRAM/CPU/GPU/TTS in commit subjects otherwise fall through to the
+  # generic bullet). Order matters: warm-up/vram must win over model.
+  local lc=$(echo "$1" | tr 'A-Z' 'a-z')
+  case "$lc" in
+    *vram*|*warm*|*preload*)                    echo "⚡ Instant first reply — her model preloads at boot, live VRAM meter in Settings" ;;
     *voice*|*mic*|*tts*|*speak*|*audio*)        echo "🗣 Voice — offline mic input & faster, batched speech" ;;
     *youtube*|*yt-*|*media*|*video*|*player*)   echo "🎵 Media — YouTube links play in the Media tab" ;;
     *dedupe*|*duplicat*|*double*)               echo "🔁 Reliability — no duplicate messages or double-players" ;;
@@ -175,7 +180,6 @@ pretty_note() {
     *tray*|*autostart*|*startup*|*taskbar*|*icon*) echo "🖥 Desktop — system tray, launch at startup, holo icon" ;;
     *delamain*|*cet*|*cyber*|*in-game*)         echo "🚕 DELAMAIN — in-game agent for Cyberpunk 2077" ;;
     *cuda*|*gpu*|*ollama*|*model*|*cpu*)        echo "⚙️ Smarter model selection — GPU fit check + CPU fallback" ;;
-    *vram*|*warm*|*preload*)                    echo "⚡ Instant first reply — her model preloads at boot, live VRAM meter in Settings" ;;
     *update*|*download*|*banner*)              echo "⬇️ In-app updater — spots new builds & links the release" ;;
     *release\ note*|*changelog*)               echo "📝 Release notes — what's new written for humans" ;;
     *quote*|*persona*|*theme*)                  echo "💜 Persona — Blade Runner quotes, themes & persona switching" ;;
