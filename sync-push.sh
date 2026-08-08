@@ -149,6 +149,10 @@ git add -A
 git -c user.name=Matthew -c user.email=mattb@example.com commit -m "$MSG" >/dev/null 2>&1
 
 echo "  · pushing to $REPO…"
+# The EXE in the pack is ~80 MB — git's default 1 MB HTTP buffer on Windows
+# dies with "remote end hung up unexpectedly", stranding main while the tag
+# and Release still go through. Raise it so the branch push always lands.
+git config http.postBuffer 524288000 || true
 if git push origin "$BRANCH" 2>&1 | tail -2; then
   SHA=$(git log --oneline -1 | awk '{print $1}')
   echo ""
