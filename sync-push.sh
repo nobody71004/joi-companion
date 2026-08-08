@@ -176,7 +176,8 @@ pretty_note() {
   # generic bullet). Order matters: warm-up/vram must win over model.
   local lc=$(echo "$1" | tr 'A-Z' 'a-z')
   case "$lc" in
-    *vram*|*warm*|*preload*)                    echo "⚡ Instant first reply — her model preloads at boot, live VRAM meter in Settings" ;;
+    *watchdog*|*unload*|*evict*)                echo "🛡️ VRAM watchdog — auto-unloads idle models before an OOM crash" ;;
+    *vram*|*warm*|*preload*|*readout*|*meter*)  echo "⚡ Instant first reply — her model preloads at boot, live VRAM readout in Settings & footer" ;;
     *voice*|*mic*|*tts*|*speak*|*audio*)        echo "🗣 Voice — offline mic input & faster, batched speech" ;;
     *youtube*|*yt-*|*media*|*video*|*player*)   echo "🎵 Media — YouTube links play in the Media tab" ;;
     *dedupe*|*duplicat*|*double*)               echo "🔁 Reliability — no duplicate messages or double-players" ;;

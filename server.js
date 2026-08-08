@@ -179,6 +179,7 @@ async function handleModels(res) {
         size: m.size,
         sizeGb,
         fits,
+        digest: m.digest || '',
         gpuNote: gpu.hasGpu
           ? (fits
               ? `fits your GPU (${sizeGb} GB ≤ ${gpu.freeGb} GB free)`
@@ -211,6 +212,10 @@ async function detectGPULive() {
         name: m.name,
         vramGb: +((m.size_vram || 0) / (1024 * 1024 * 1024)).toFixed(2),
         totalGb: +((m.size || 0) / (1024 * 1024 * 1024)).toFixed(2),
+        /* keep-alive expiry = recency proxy for the LRU watchdog: the model
+           whose keep_alive runs out soonest has been idle longest */
+        expiresAt: m.expires_at ? new Date(m.expires_at).getTime() : 0,
+        digest: m.digest || '',
       }));
       info.usedByModelGb = +(info.loadedModels.reduce((s, m) => s + (m.vramGb || 0), 0)).toFixed(2);
     }
@@ -283,6 +288,35 @@ async function handleWarmup(req, res) {
     signal: AbortSignal.timeout(120000),
   }).catch(() => { /* warm-up is best-effort */ });
   return sendJson(res, 200, { warming: true, model });
+}
+
+/* ---------------- /api/unload (free a model from VRAM) ----------------
+   The client's VRAM watchdog calls this when free memory gets dangerously
+   low (below ~1 GB) while she's idle — evict the least-recently-used model
+   that isn't the one she's currently running, so the next reply can't OOM.
+   keep_alive: 0 is Ollama's documented unload: the request returns
+   immediately and the model is evicted from VRAM/RAM. */
+async function handleUnload(req, res) {
+  let body = {};
+  try { body = JSON.parse(await readBody(req)); } catch { /* fall through */ }
+  const model = String(body.model || '').trim();
+  if (!model) return sendJson(res, 400, { error: 'No model to unload.' });
+  const base = String(body.base || PRESETS.ollama.base || '')
+    .replace(/\/+$/, '')
+    .replace(/\/v1\/?$/, '');
+  if (!base) return sendJson(res, 400, { error: 'No Ollama base URL.' });
+  try {
+    await fetch(`${base}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, prompt: 'x', keep_alive: 0, options: { num_predict: 1 } }),
+      signal: AbortSignal.timeout(15000),
+    });
+    gpuLiveCache = { at: 0, info: null }; // next poll reflects the freed VRAM
+    return sendJson(res, 200, { unloaded: model });
+  } catch {
+    return sendJson(res, 502, { error: 'Unload failed — is Ollama running?' });
+  }
 }
 
 /* ---------------- /api/yt-meta (YouTube link unfurl for media cards) ----------------
@@ -1088,6 +1122,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/models') return handleModels(res);
   if (req.method === 'GET' && url.pathname === '/api/gpu') return handleGpu(res);
   if (req.method === 'POST' && url.pathname === '/api/warmup') return handleWarmup(req, res);
+  if (req.method === 'POST' && url.pathname === '/api/unload') return handleUnload(req, res);
   if (req.method === 'GET' && url.pathname === '/api/state') return handleState(res);
   if (req.method === 'GET' && url.pathname === '/api/history') return handleHistoryGet(res);
   if (req.method === 'POST' && url.pathname === '/api/history') return handleHistorySet(req, res);

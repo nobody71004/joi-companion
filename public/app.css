@@ -392,6 +392,23 @@ input[type="range"] { width: 100%; accent-color: #ff9ecb; margin-top: 6px; }
   border-radius: 8px;
 }
 
+/* warm-up pulse dot next to the model name (top telemetry) */
+.warm-dot {
+  display: inline-block;
+  width: 7px; height: 7px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--pink);
+  box-shadow: 0 0 8px var(--pink);
+  vertical-align: middle;
+  animation: warm-pulse 1.1s ease-in-out infinite;
+}
+@keyframes warm-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.25; transform: scale(0.7); }
+}
+#foot-vram { font-family: 'JetBrains Mono', monospace; }
+
 /* live VRAM meter in the Settings brain panel */
 .vram-box { margin: 10px 0 4px; }
 .vram-track {

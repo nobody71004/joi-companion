@@ -1289,12 +1289,76 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
   function startVramMeter() { stopVramMeter(); refreshVram(); vramTimer = setInterval(refreshVram, 2000); }
   function stopVramMeter() { if (vramTimer) { clearInterval(vramTimer); vramTimer = null; } }
 
+  /* ---- global VRAM ticker (always on, not just while Settings is open):
+     keeps the footer readout live, clears the warm-up dot once her model is
+     resident, and runs the low-VRAM watchdog that evicts an idle model
+     before the next reply can OOM-crash. ---- */
+  /* active-model identity: match by manifest digest when known (handles
+     aliases like qwen3:4b vs its hf.co origin), else exact name */
+  function isActiveModel(m) {
+    const dg = (window.__digestByModel || {})[prefs.model];
+    if (dg && m.digest) return m.digest === dg;
+    return m.name === prefs.model;
+  }
+  let lastUnloadAt = 0;
+  async function vramTick() {
+    let g;
+    try {
+      const r = await fetch('/api/gpu');
+      g = await r.json();
+    } catch { return; }
+    const free = g.freeGb || 0;
+    const used = g.usedByModelGb || 0;
+    const foot = $('#foot-vram');
+    if (foot) {
+      if (!g.hasGpu) { foot.textContent = 'CPU'; foot.style.color = ''; }
+      else {
+        foot.textContent = `${used} / ${free} GB free`;
+        foot.style.color = free < 1 ? '#ff5d6d' : '';
+      }
+    }
+    /* warm-up dot: hide once her model shows up as resident */
+    if (warmingUp && Array.isArray(g.loadedModels) && g.loadedModels.some(isActiveModel)) {
+      setWarming(false);
+    }
+    /* watchdog: < ~1.2 GB free while she's idle → evict the LRU non-active
+       model. Only her active model loaded? Nothing safe to free — leave it. */
+    if (prefs.provider !== 'ollama' || prefs.forceCPU || !g.hasGpu || free >= 1.2) return;
+    if (Date.now() - lastUnloadAt < 60 * 1000) return;
+    if (!Array.isArray(g.loadedModels) || !g.loadedModels.length) return;
+    const st = await fetch('/api/state').then((x) => x.json()).catch(() => ({}));
+    if ((st.activeStreams || 0) > 0) return; // mid-reply — never yank a model
+    const lru = g.loadedModels
+      .filter((m) => !isActiveModel(m))
+      .sort((a, b) => (a.expiresAt || 0) - (b.expiresAt || 0))[0];
+    if (!lru) return;
+    try {
+      const ur = await fetch('/api/unload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: lru.name, base: prefs.base }),
+      });
+      const uj = await ur.json().catch(() => ({}));
+      if (uj.unloaded) {
+        lastUnloadAt = Date.now();
+        addMsg('joi', `<span class="em">system</span>VRAM was nearly full (${free.toFixed(1)} GB free), so I unloaded ${mdEscape(lru.name.split('/').pop())} (${lru.vramGb} GB) — she'll reload on demand.`, 'auto-recovery');
+      }
+    } catch { /* best-effort — try again next tick */ }
+  }
+  setInterval(vramTick, 4000);
+
   /* ---- boot-time warm-up: preload her model in the background so the
      first reply doesn't cold-load. Best-effort, fire-and-forget. ---- */
+  let warmingUp = false;
+  function setWarming(on) {
+    warmingUp = on;
+    const dot = $('#warm-dot');
+    if (dot) dot.style.display = on ? '' : 'none';
+  }
   async function warmUpModel() {
     if (prefs.provider !== 'ollama' || !prefs.model) return;
     try {
-      await fetch('/api/warmup', {
+      const r = await fetch('/api/warmup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1304,6 +1368,10 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
           forceCPU: !!prefs.forceCPU,
         }),
       });
+      const j = await r.json().catch(() => ({}));
+      /* dot pulses only while she's genuinely loading (the server skips when
+         the model is already resident) */
+      setWarming(!!(j && j.warming));
     } catch { /* warm-up is best-effort — never break boot */ }
   }
 
@@ -1321,6 +1389,9 @@ The user can hear you, so keep replies natural to speak aloud (no heavy formatti
           modelSel.add(new Option(m.name + (risky(m) ? ' ⚠ big' : ''), m.name));
           if (m.contextLength) window.__ctxByModel = Object.assign(window.__ctxByModel || {}, { [m.name]: m.contextLength });
           window.__fitByModel = Object.assign(window.__fitByModel || {}, { [m.name]: !risky(m) });
+          /* digest map lets the watchdog identify her ACTIVE model even when
+             an alias is loaded under its origin tag (qwen3:4b → hf.co/…) */
+          if (m.digest) window.__digestByModel = Object.assign(window.__digestByModel || {}, { [m.name]: m.digest });
         });
         if (!d.models.some((m) => m.name === prefs.model)) prefs.model = d.models[0].name;
 
